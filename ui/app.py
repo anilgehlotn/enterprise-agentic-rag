@@ -110,6 +110,13 @@ def upload_documents_dialog():
             st.session_state.uploaded_documents.extend(indexed)
             progress.progress(100, text="Documents indexed successfully")
             st.success(f"{len(indexed)} document{'s' if len(indexed) != 1 else ''} added to the knowledge workspace.")
+        except requests.HTTPError as exc:
+            progress.empty()
+            try:
+                detail = exc.response.json().get("detail", str(exc))
+            except ValueError:
+                detail = str(exc)
+            st.error(f"Upload could not be completed: {detail}")
         except requests.RequestException as exc:
             progress.empty()
             st.error(f"Upload could not be completed: {exc}")
