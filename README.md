@@ -12,6 +12,8 @@ A production-grade, enterprise-level RAG system built with **LangGraph**, **Port
 - **Local Document Parsing**: PDF, HTML, TXT, DOCX, PPTX parsed entirely on-device — no external OCR service.
 - **Observability**: Full trace nesting with **Pydantic Logfire** and **LangSmith** across every agent node.
 - **Evaluation Suite**: RAGAS-powered eval pipeline (6 metrics) with a dedicated Streamlit demo app.
+- **Evidence-First Responses**: Retrieved chunks retain their filename, source type, and relevance score through reranking so the UI can show answer provenance.
+- **Delivery Readiness**: API health endpoint, focused unit tests, and GitHub Actions checks support reliable demos and deployment.
 
 ---
 
@@ -52,7 +54,7 @@ graph TD
 ├── evals/               # RAGAS evaluation suite + Streamlit 3-tab demo
 ├── ui/                  # Streamlit chat interface with reasoning step transparency
 ├── processed_data/      # Auto-generated — parsed & chunked JSON output per document
-├── docs/                # Architectural and operational guides (11 docs)
+├── DOCS/                # Architectural and operational guides
 ├── DATA/                # Sample datasets (True vs Noisy documentation)
 └── requirements.txt     # Pinned dependencies
 ```
@@ -153,17 +155,18 @@ streamlit run evals/app.py
 
 | # | Guide | What it covers |
 |---|-------|---------------|
-| 01 | [System Overview](docs/01_SYSTEM_OVERVIEW.md) | High-level vision and end-to-end flow |
-| 02 | [Ingestion Engine](docs/02_INGESTION_ENGINE.md) | Document parsing and indexing pipeline |
-| 03 | [Node Intelligence](docs/03_NODE_INTELLIGENCE.md) | Planner, Retriever, Responder internals |
-| 04 | [Observability](docs/04_TRACING_AND_OBSERVABILITY.md) | Logfire + LangSmith tracing |
-| 05 | [Environment Variables](docs/05_ENVIRONMENT_VARIABLES.md) | All env vars and configuration reference |
-| 06 | [Known Gotchas](docs/06_KNOWN_GOTCHAS.md) | Non-obvious bugs and architectural decisions |
-| 07 | [FlashRank Reranking](docs/07_FLASHRANK_RERANKING.md) | Local semantic reranker deep-dive |
-| 08 | [Guardrails](docs/08_GUARDRAILS.md) | NeMo Guardrails implementation |
-| 09 | [LLM Gateway](docs/09_LLM_GATEWAY.md) | Portkey routing, fallback, and observability |
-| 10 | [Evals](docs/10_EVALS.md) | RAGAS metrics theory and token budget |
-| 11 | [Evals Pipeline](docs/11_EVALS_PIPELINE.md) | Live eval pipeline and Streamlit demo |
+| 01 | [System Overview](DOCS/01_SYSTEM_OVERVIEW.md) | High-level vision and end-to-end flow |
+| 02 | [Ingestion Engine](DOCS/02_INGESTION_ENGINE.md) | Document parsing and indexing pipeline |
+| 03 | [Node Intelligence](DOCS/03_NODE_INTELLIGENCE.md) | Planner, Retriever, Responder internals |
+| 04 | [Observability](DOCS/04_TRACING_AND_OBSERVABILITY.md) | Logfire + LangSmith tracing |
+| 05 | [Environment Variables](DOCS/05_ENVIRONMENT_VARIABLES.md) | All env vars and configuration reference |
+| 06 | [Known Gotchas](DOCS/06_KNOWN_GOTCHAS.md) | Non-obvious bugs and architectural decisions |
+| 07 | [FlashRank Reranking](DOCS/07_FLASHRANK_RERANKING.md) | Local semantic reranker deep-dive |
+| 08 | [Guardrails](DOCS/08_GUARDRAILS.md) | NeMo Guardrails implementation |
+| 09 | [LLM Gateway](DOCS/09_LLM_GATEWAY.md) | Portkey routing, fallback, and observability |
+| 10 | [Evals](DOCS/10_EVALS.md) | RAGAS metrics theory and token budget |
+| 11 | [Evals Pipeline](DOCS/11_EVALS_PIPELINE.md) | Live eval pipeline and Streamlit demo |
+| 12 | [Deployment and Demo](DOCS/12_DEPLOYMENT_AND_DEMO.md) | Local runbook, container readiness, and interview walkthrough |
 
 ---
 
