@@ -2,6 +2,10 @@
 
 An evidence-first AI assistant for technical document intelligence. It ingests mixed enterprise documents, retrieves and reranks the most relevant evidence, applies safety guardrails, and delivers source-attributed answers through a FastAPI service and Streamlit interface.
 
+> **Live demo:** [Open Enterprise Agentic RAG](https://anil-enterprise-rag.streamlit.app/)
+
+Use the demo to upload a supported document, ask a technical question, and inspect the retrieved evidence that supports the answer.
+
 ## Why this project
 
 Enterprise teams need answers they can verify, not a generic chatbot. This project demonstrates an end-to-end RAG application with:
@@ -140,7 +144,7 @@ streamlit run evals/app.py
 
 ## Deployment
 
-The FastAPI service is containerized with the provided `Dockerfile` and listens on port `8080` in a container. See [Deployment and Demo Guide](DOCS/12_DEPLOYMENT_AND_DEMO.md) for the local demo flow, container commands, and a deployment checklist.
+The public Streamlit experience is available at [anil-enterprise-rag.streamlit.app](https://anil-enterprise-rag.streamlit.app/). The FastAPI service is containerized with the provided `Dockerfile` and exposes a `/health` endpoint for deployment checks. See [Deployment and Demo Guide](DOCS/12_DEPLOYMENT_AND_DEMO.md) for the local demo flow, container commands, and a deployment checklist.
 
 ## Documentation
 
