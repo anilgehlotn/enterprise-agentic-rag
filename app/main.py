@@ -13,8 +13,9 @@ logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
 from fastapi import FastAPI, Response
 from app.agents.graph import rag_agent
 from app.guardrails import initialize_rails, guard
+from app.services.retrieval.citations import build_citations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
@@ -27,13 +28,35 @@ def startup_event():
     initialize_rails()
 
 class QueryRequest(BaseModel):
-    q: str
+    q: str = Field(min_length=1, max_length=4_000, description="The user's question")
     thread_id: Optional[str] = "default_user"
+
+
+class SourceChunk(BaseModel):
+    source: str
+    source_type: str = "unknown"
+    content: str
+    rerank_score: Optional[float] = None
+    score: Optional[float] = None
+
+
+class QueryResponse(BaseModel):
+    question: str
+    answer: str
+    thought_process: list[str]
+    status: str
+    sources: list[SourceChunk]
     
     
 @app.get("/")
 def home():
     return {"message": "Enterprise LangGraph RAG API is live."}
+
+
+@app.get("/health")
+def health_check():
+    """Lightweight readiness endpoint for local and container deployments."""
+    return {"status": "ok", "service": "enterprise-agentic-rag"}
 
 
 @app.get("/graph")
@@ -48,7 +71,7 @@ def get_graph_image():
         return {"error": f"Could not generate graph image: {e}"}
     
     
-@app.post("/query")
+@app.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest):
     """
     Executes the LangGraph RAG flow with memory using a POST request.
@@ -89,7 +112,7 @@ def query(request: QueryRequest):
             "answer": final_output.get("final_answer"),
             "thought_process": final_output.get("plan"),
             "status": final_output.get("status"),
-            "sources": final_output.get("documents", [])
+            "sources": build_citations(final_output.get("documents", []))
         }
     except Exception as e:
         logfire.error(f"❌ Backend Execution Failed: {e}")
