@@ -4,15 +4,18 @@
 # ============================================================
 import logfire
 import os
+import tempfile
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
 
 # Now safe to import app modules - logfire is already active
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from app.agents.graph import rag_agent
 from app.guardrails import initialize_rails, guard
+from app.ingestion.processor import process_file
 from app.services.retrieval.citations import build_citations
 
 from pydantic import BaseModel, Field
@@ -46,6 +49,16 @@ class QueryResponse(BaseModel):
     thought_process: list[str]
     status: str
     sources: list[SourceChunk]
+
+
+class UploadResult(BaseModel):
+    filename: str
+    chunks_indexed: int
+    status: str = "indexed"
+
+
+ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".html", ".htm", ".txt", ".docx", ".pptx"}
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
     
     
 @app.get("/")
@@ -69,6 +82,43 @@ def get_graph_image():
         return Response(content=png_bytes, media_type="image/png")
     except Exception as e:
         return {"error": f"Could not generate graph image: {e}"}
+
+
+@app.post("/documents", response_model=list[UploadResult], status_code=201)
+async def upload_documents(files: list[UploadFile] = File(...)):
+    """Validate, index, and retain source metadata for user-provided documents."""
+    if not files:
+        raise HTTPException(status_code=400, detail="Attach at least one document.")
+
+    uploaded = []
+    for upload in files:
+        filename = Path(upload.filename or "untitled").name
+        extension = Path(filename).suffix.lower()
+        if extension not in ALLOWED_DOCUMENT_EXTENSIONS:
+            raise HTTPException(
+                status_code=415,
+                detail=f"{filename}: unsupported file type. Use PDF, HTML, TXT, DOCX, or PPTX.",
+            )
+
+        content = await upload.read()
+        if not content:
+            raise HTTPException(status_code=400, detail=f"{filename}: file is empty.")
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"{filename}: limit is 25 MB per file.")
+
+        with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as temporary_file:
+            temporary_file.write(content)
+            temporary_path = temporary_file.name
+
+        try:
+            result = process_file(temporary_path, filename, source_type="uploaded")
+            if not result:
+                raise HTTPException(status_code=422, detail=f"{filename}: could not extract usable text.")
+            uploaded.append(UploadResult(filename=filename, chunks_indexed=result["chunks_indexed"]))
+        finally:
+            Path(temporary_path).unlink(missing_ok=True)
+
+    return uploaded
     
     
 @app.post("/query", response_model=QueryResponse)
