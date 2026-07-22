@@ -104,10 +104,13 @@ if prompt := st.chat_input("Ask about your documentation..."):
                     if sources:
                         with st.expander("📄 View Retrieved Context (Sources)"):
                             for i, source in enumerate(sources):
-                                # Create a preview title for each chunk
-                                preview = source[:100].replace("\n", " ") + "..."
-                                with st.expander(f"Chunk {i+1}: {preview}"):
-                                    st.info(source)
+                                source_name = source.get("source", "Unknown source")
+                                content = source.get("content", "")
+                                score = source.get("rerank_score") or source.get("score")
+                                score_label = f" | relevance: {score:.3f}" if isinstance(score, float) else ""
+                                with st.expander(f"{i+1}. {source_name}{score_label}"):
+                                    st.caption(f"Type: {source.get('source_type', 'unknown')}")
+                                    st.info(content)
                 except Exception as e:
                     logfire.error(f"❌ UI-Backend Connection Failed: {e}")
                     status.update(label="❌ Connection Failed", state="error")

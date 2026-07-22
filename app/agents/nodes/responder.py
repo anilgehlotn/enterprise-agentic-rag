@@ -1,6 +1,7 @@
 import logfire
 from app.agents.state import AgentState
 from app.gateway import portkey_client, extract_cache_status
+from app.services.retrieval.citations import format_context
 
 
 def generate_node(state: AgentState):
@@ -32,15 +33,7 @@ def generate_node(state: AgentState):
         """
     else:
         logfire.info("Generating technical RAG response.")
-        max_context_chars = 25000
-        full_context = ""
-
-        for doc in state["documents"]:
-            if len(full_context) + len(doc) < max_context_chars:
-                full_context += doc + "\n\n"
-            else:
-                logfire.warning("Context truncated to fit Groq TPM limits.")
-                break
+        full_context = format_context(state["documents"])
 
         prompt = f"""
         You are a Senior Technical Architect.

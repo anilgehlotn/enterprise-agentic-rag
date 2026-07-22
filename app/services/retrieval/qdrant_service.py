@@ -32,6 +32,7 @@ def search_enterprise_knowledge(query: str, limit: int = 8):
             results.append({
                 "content": res.payload.get("text", ""),
                 "source": res.payload.get("source", "Unknown"),
+                "source_type": res.payload.get("source_type", "unknown"),
                 "score": res.score
             })
         

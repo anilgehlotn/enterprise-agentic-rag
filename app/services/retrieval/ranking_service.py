@@ -65,3 +65,28 @@ def rerank_documents(query: str, documents: list[str], top_n: int = 5) -> list[s
         logfire.error(f"❌ [Reranker] Semantic Reranking Failed: {e}")
         # Fallback to the original Qdrant order to ensure the user still gets an answer
         return documents[:top_n]
+
+
+def rerank_records(query: str, records: list[dict], top_n: int = 5) -> list[dict]:
+    """Rerank retrieval records while retaining source and score metadata."""
+    if not records:
+        return []
+
+    try:
+        ranker = _get_ranker()
+        passages = [
+            {"id": index, "text": record.get("content", "")}
+            for index, record in enumerate(records)
+            if record.get("content")
+        ]
+        results = ranker.rerank(RerankRequest(query=query, passages=passages))
+
+        ranked_records = []
+        for result in results[:top_n]:
+            record = dict(records[result["id"]])
+            record["rerank_score"] = result.get("score")
+            ranked_records.append(record)
+        return ranked_records
+    except Exception as exc:
+        logfire.error(f"❌ [Reranker] Metadata-aware reranking failed: {exc}")
+        return records[:top_n]
