@@ -1,4 +1,4 @@
-# Enterprise Agentic RAG - Beginner-to-Interview Guide
+# Enterprise Agentic RAG - Beginner Guide
 
 > **Goal:** Read this document from top to bottom before discussing the project in an interview. It explains what the application does, why each component exists, how the code is organized, and how to answer common questions honestly and clearly.
 
