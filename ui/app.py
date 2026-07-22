@@ -28,9 +28,26 @@ except Exception as e:
 
 # --- PAGE CONFIG ---
 st.set_page_config(
-    page_title="Enterprise Agentic RAG",
-    page_icon="🤖",
+    page_title="Evidence Workspace",
+    page_icon="✦",
     layout="wide",
+)
+
+st.markdown(
+    """
+    <style>
+      .stApp { background: radial-gradient(circle at 15% 8%, #eee9ff 0, #faf9ff 28%, #ffffff 72%); }
+      .block-container { max-width: 1180px; padding-top: 2.25rem; }
+      .workspace-eyebrow { color: #6d4aff; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: .78rem; }
+      .workspace-title { color: #160c55; font-size: 2.7rem; font-weight: 750; margin: .2rem 0; }
+      .workspace-copy { color: #6b6880; font-size: 1.08rem; margin-bottom: 1.3rem; }
+      .stButton button { border-radius: 12px; font-weight: 650; min-height: 2.8rem; }
+      [data-testid="stChatInput"] { border-radius: 16px; border: 1px solid #ddd7fa; box-shadow: 0 8px 24px rgba(80, 55, 180, .08); }
+      [data-testid="stFileUploader"] { border: 1.5px dashed #b7a8ff; border-radius: 16px; background: #fcfbff; padding: 1.4rem; }
+      [data-testid="stFileUploaderDropzone"] { background: transparent; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # --- AVATARS ---
@@ -46,13 +63,67 @@ if "session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "uploaded_documents" not in st.session_state:
+    st.session_state.uploaded_documents = []
+
+
+def _backend_url() -> str:
+    return os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+
+
+@st.dialog("Upload and attach files", width="large")
+def upload_documents_dialog():
+    st.caption("Add knowledge sources to the workspace. Files are indexed with source metadata for traceable answers.")
+    uploads = st.file_uploader(
+        "Drop documents here or browse your device",
+        type=["pdf", "html", "htm", "txt", "docx", "pptx"],
+        accept_multiple_files=True,
+        help="Up to 25 MB per document. Supported: PDF, HTML, TXT, DOCX, and PPTX.",
+    )
+
+    if uploads:
+        st.markdown(f"#### {len(uploads)} file{'s' if len(uploads) != 1 else ''} ready to attach")
+        for upload in uploads:
+            left, right = st.columns([5, 1])
+            left.markdown(f"**{upload.name}**  \\n+`{upload.size / (1024 * 1024):.2f} MB` • Ready for indexing")
+            right.success("Ready")
+
+    action_left, action_right = st.columns(2)
+    if action_left.button("Cancel", width="stretch"):
+        st.rerun()
+    if action_right.button("Attach and index files", type="primary", width="stretch", disabled=not uploads):
+        progress = st.progress(0, text="Preparing secure upload…")
+        indexed = []
+        try:
+            for position, upload in enumerate(uploads, start=1):
+                progress.progress(
+                    int(((position - 1) / len(uploads)) * 100),
+                    text=f"Indexing {upload.name} ({position}/{len(uploads)})…",
+                )
+                response = requests.post(
+                    f"{_backend_url()}/documents",
+                    files={"files": (upload.name, upload.getvalue(), upload.type)},
+                    timeout=180,
+                )
+                response.raise_for_status()
+                indexed.extend(response.json())
+            st.session_state.uploaded_documents.extend(indexed)
+            progress.progress(100, text="Documents indexed successfully")
+            st.success(f"{len(indexed)} document{'s' if len(indexed) != 1 else ''} added to the knowledge workspace.")
+        except requests.RequestException as exc:
+            progress.empty()
+            st.error(f"Upload could not be completed: {exc}")
+
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("🧠 Agent OS")
+    st.title("✦ Evidence Workspace")
     st.markdown("---")
-    st.success(f"Logfire: {LOGFIRE_STATUS}")
-    st.info(f"Memory ID: {st.session_state.session_id[:8]}")
+    st.caption("Source-grounded AI for technical knowledge")
+    if st.button("＋ Upload knowledge sources", width="stretch", type="primary"):
+        upload_documents_dialog()
+    st.success(f"Tracing: {LOGFIRE_STATUS}")
+    st.info(f"Conversation: {st.session_state.session_id[:8]}")
     
     if st.button("🗑️ Clear History & Memory", width="stretch", type="primary"):
         logfire.warn(f"🗑️ Memory Wipe Triggered for session: {st.session_state.session_id}")
@@ -61,7 +132,17 @@ with st.sidebar:
         st.rerun()
 
 # --- MAIN CHAT ---
-st.title("🤖 Enterprise Agentic Assistant")
+st.markdown('<div class="workspace-eyebrow">Enterprise document intelligence</div>', unsafe_allow_html=True)
+headline, upload_action = st.columns([4, 1])
+headline.markdown('<div class="workspace-title">Ask questions with evidence.</div>', unsafe_allow_html=True)
+if upload_action.button("Upload files", type="primary", width="stretch"):
+    upload_documents_dialog()
+st.markdown('<div class="workspace-copy">Search trusted documents, inspect the retrieved context, and keep every answer traceable to its source.</div>', unsafe_allow_html=True)
+
+if st.session_state.uploaded_documents:
+    with st.expander(f"Workspace sources · {len(st.session_state.uploaded_documents)} indexed", expanded=False):
+        for document in st.session_state.uploaded_documents:
+            st.markdown(f"**{document['filename']}** · {document['chunks_indexed']} chunks indexed")
 
 
 # Display history
@@ -71,7 +152,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # Chat Input
-if prompt := st.chat_input("Ask about your documentation..."):
+if prompt := st.chat_input("Ask a question about your knowledge sources…"):
     # START TRACE: User Interaction
     with logfire.span("💬 User Chat Interaction", user_query=prompt, session_id=st.session_state.session_id):
         
@@ -86,8 +167,7 @@ if prompt := st.chat_input("Ask about your documentation..."):
                     # DISTRIBUTED TRACE: Calling Backend
                     with logfire.span("📡 Calling RAG Backend"):
                         # Get backend URL from env, or default to local if not set
-                        base_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-                        url = f"{base_url}/query"
+                        url = f"{_backend_url()}/query"
                         payload = {"q": prompt, "thread_id": st.session_state.session_id}
                         response = requests.post(url, json=payload, timeout=60)
                         data = response.json()

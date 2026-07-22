@@ -10,6 +10,7 @@ fastapi==0.136.1
 uvicorn[standard]==0.46.0
 python-dotenv==1.2.2
 requests==2.33.1
+python-multipart
 numpy==2.4.4
 pytz==2026.2
 

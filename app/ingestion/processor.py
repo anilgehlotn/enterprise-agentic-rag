@@ -94,9 +94,11 @@ def process_file(file_path: str, filename: str, source_type: str):
                     points=points,
                 )
                 logfire.info(f"Indexed {len(points)} points to Qdrant from {filename}.")
+            return {"filename": filename, "chunks_indexed": len(chunks), "processed_path": local_path}
 
         except Exception as e:
             logfire.error(f"Failed to process {filename}: {e}")
+            return None
 
 
 def process_directory(dir_path: str, source_type: str):
