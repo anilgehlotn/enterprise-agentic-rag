@@ -155,5 +155,6 @@ The public Streamlit experience is available at [anil-enterprise-rag.streamlit.a
 - [LLM gateway](DOCS/09_LLM_GATEWAY.md)
 - [Evaluation methodology](DOCS/10_EVALS.md)
 - [Deployment and interview demo](DOCS/12_DEPLOYMENT_AND_DEMO.md)
+- [Beginner-to-interview guide](DOCS/13_BEGINNER_TO_INTERVIEW_GUIDE.md)
 
 
