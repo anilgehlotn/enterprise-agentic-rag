@@ -152,6 +152,4 @@ The FastAPI service is containerized with the provided `Dockerfile` and listens 
 - [Evaluation methodology](DOCS/10_EVALS.md)
 - [Deployment and interview demo](DOCS/12_DEPLOYMENT_AND_DEMO.md)
 
-## Project provenance
 
-This repository is a structured portfolio import of the original [8hr-MARATHON](https://github.com/d-hackmt/8hr-MARATHON) project. The portfolio branch and commit layout group the implementation by engineering capability; see [SOURCE.md](SOURCE.md) for attribution.
