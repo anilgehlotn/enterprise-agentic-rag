@@ -26,6 +26,22 @@ qdrant_client = QdrantClient(
 )
 
 
+def ensure_collection() -> None:
+    """Create the knowledge collection on demand for first-time uploads."""
+    if qdrant_client.collection_exists(settings.QDRANT_COLLECTION):
+        return
+
+    dim = get_embedding_dim()
+    qdrant_client.create_collection(
+        collection_name=settings.QDRANT_COLLECTION,
+        vectors_config=models.VectorParams(size=dim, distance=models.Distance.COSINE),
+    )
+    logfire.info(
+        f"Created collection '{settings.QDRANT_COLLECTION}' "
+        f"({dim}-dim, Cosine) for document upload."
+    )
+
+
 def save_processed_locally(data: dict, source_type: str, filename: str) -> str:
     """Save parsed chunk metadata as JSON in processed_data/<source_type>/."""
     folder = os.path.join(PROCESSED_DATA_DIR, source_type)
@@ -75,6 +91,7 @@ def process_file(file_path: str, filename: str, source_type: str):
 
             # 4. Embed and index in Qdrant
             with logfire.span("Vectorizing & Indexing"):
+                ensure_collection()
                 embeddings = embed_texts(chunks)
                 points = [
                     models.PointStruct(
@@ -98,7 +115,7 @@ def process_file(file_path: str, filename: str, source_type: str):
 
         except Exception as e:
             logfire.error(f"Failed to process {filename}: {e}")
-            return None
+            return {"filename": filename, "error": "processing_failed"}
 
 
 def process_directory(dir_path: str, source_type: str):

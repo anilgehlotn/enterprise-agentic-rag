@@ -112,8 +112,11 @@ async def upload_documents(files: list[UploadFile] = File(...)):
 
         try:
             result = process_file(temporary_path, filename, source_type="uploaded")
-            if not result:
-                raise HTTPException(status_code=422, detail=f"{filename}: could not extract usable text.")
+            if not result or result.get("error"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"{filename}: processing or indexing failed. Check the backend logs for the provider error.",
+                )
             uploaded.append(UploadResult(filename=filename, chunks_indexed=result["chunks_indexed"]))
         finally:
             Path(temporary_path).unlink(missing_ok=True)
