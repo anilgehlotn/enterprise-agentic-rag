@@ -4,6 +4,9 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+# Shared input limit for the /query API and the MCP ask_knowledge_base tool.
+MAX_QUESTION_CHARS = 4_000
+
 
 class SourceChunk(BaseModel):
     """One piece of retrieved evidence. Field names must match build_citations()."""

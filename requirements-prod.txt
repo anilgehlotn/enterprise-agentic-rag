@@ -36,6 +36,9 @@ pydantic==2.13.4
 nemoguardrails==0.21.0
 langchain-nvidia-ai-endpoints==1.3.0
 
+# --- MCP SERVER (app/mcp_server.py) ---
+mcp==2.3.0
+
 # --- LLM GATEWAY ---
 portkey-ai==2.3.0
 

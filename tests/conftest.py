@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 if "logfire" not in sys.modules:
     sys.modules["logfire"] = SimpleNamespace(
+        configure=lambda *args, **kwargs: None,
         span=lambda *args, **kwargs: nullcontext(),
         info=lambda *args, **kwargs: None,
         warning=lambda *args, **kwargs: None,

@@ -13,6 +13,9 @@ numpy                       # Numerical processing
 pytz                        # Timezone handling for logs
 nest-asyncio                # Support for nested async loops in notebooks/streamlit
 
+# --- MCP SERVER (app/mcp_server.py) ---
+mcp==2.3.0                  # Official Model Context Protocol SDK (MCPServer API, 2.x)
+
 # --- GEMINI EMBEDDINGS ---
 google-generativeai         # Gemini API — embeddings (text-embedding-004 / gemini-embedding-001)
 langchain-google-genai      # LangChain integration for Gemini models
