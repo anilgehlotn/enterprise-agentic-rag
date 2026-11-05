@@ -27,7 +27,7 @@ def detect_tool(thought_process: list) -> str:
     Maps the thought_process list from /query response to a tool name.
     Planner sets:   'Intent: Technical' + 'Search Term: ...' → retrieve_documents
                     'Intent: Conversational/Memory'           → direct_answer
-    Retriever sets: 'Retrieval attempt n/2: ...'              → retrieve_documents
+    Retriever sets: 'Retrieval attempt n/2 (hybrid|dense): ...' → retrieve_documents
                     (grader / rewriter / verifier steps only follow a retrieval)
     main.py sets:   'Intent: Guardrails Fired'                → guardrails
     Technical markers are checked before 'memory', because a rewritten search

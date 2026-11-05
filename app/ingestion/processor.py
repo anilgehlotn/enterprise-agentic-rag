@@ -1,45 +1,27 @@
+"""Document ingestion: parse → chunk → save locally → embed (dense + BM25) → index in Qdrant.
+
+Used by the CLI (`python -m app.ingestion.processor DATA --wipe`) and the /documents
+upload endpoint. Importing this module has no side effects: no Logfire configuration,
+no Qdrant client and no embedding model are created until a file is processed.
+"""
+
 import os
 import sys
 import uuid
 import json
 import logfire
 
-from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
 from app.config import settings
-from app.services.retrieval.embedding import embed_texts, get_embedding_dim
-from app.ingestion.loaders.pdf import parse_pdf
-from app.ingestion.loaders.html import parse_html
-from app.ingestion.loaders.text import parse_text
+from app.services.retrieval.embedding import embed_texts
+from app.services.retrieval.qdrant_service import delete_collection, ensure_collection, get_qdrant_client
+from app.services.retrieval.schema import DENSE_VECTOR, SPARSE_VECTOR, CollectionSchemaError
+from app.services.retrieval.sparse_embedding import embed_sparse_documents
 from app.ingestion.chunking.splitter import chunk_text
-
-logfire.configure(service_name="enterprise-ingestion-service")
 
 # Local folder where parsed + chunked JSON metadata is saved (replaces GCS processed bucket)
 PROCESSED_DATA_DIR = "processed_data"
-
-# Initialize Qdrant Client
-qdrant_client = QdrantClient(
-    url=settings.QDRANT_URL,
-    api_key=settings.QDRANT_API_KEY,
-)
-
-
-def ensure_collection() -> None:
-    """Create the knowledge collection on demand for first-time uploads."""
-    if qdrant_client.collection_exists(settings.QDRANT_COLLECTION):
-        return
-
-    dim = get_embedding_dim()
-    qdrant_client.create_collection(
-        collection_name=settings.QDRANT_COLLECTION,
-        vectors_config=models.VectorParams(size=dim, distance=models.Distance.COSINE),
-    )
-    logfire.info(
-        f"Created collection '{settings.QDRANT_COLLECTION}' "
-        f"({dim}-dim, Cosine) for document upload."
-    )
 
 
 def save_processed_locally(data: dict, source_type: str, filename: str) -> str:
@@ -52,17 +34,39 @@ def save_processed_locally(data: dict, source_type: str, filename: str) -> str:
     return dest
 
 
+def build_points(chunks: list[str], filename: str, source_type: str) -> list[models.PointStruct]:
+    """One point per chunk carrying BOTH named vectors: "dense" (Gemini) and "bm25" (sparse)."""
+    dense_vectors = embed_texts(chunks)
+    sparse_vectors = embed_sparse_documents(chunks)
+    if not len(dense_vectors) == len(sparse_vectors) == len(chunks):
+        raise RuntimeError(
+            f"Embedding count mismatch for {filename}: {len(chunks)} chunks, "
+            f"{len(dense_vectors)} dense, {len(sparse_vectors)} sparse."
+        )
+    return [
+        models.PointStruct(
+            id=str(uuid.uuid4()),
+            vector={DENSE_VECTOR: dense, SPARSE_VECTOR: sparse},
+            payload={"text": chunk, "source": filename, "source_type": source_type},
+        )
+        for chunk, dense, sparse in zip(chunks, dense_vectors, sparse_vectors)
+    ]
+
+
 def process_file(file_path: str, filename: str, source_type: str):
     """Parse → chunk → save locally → embed → index in Qdrant."""
     with logfire.span("Processing File", file=filename, source=source_type):
         try:
-            # 1. Extract text based on file extension
+            # 1. Extract text based on file extension (parsers imported on demand)
             ext = filename.lower().rsplit(".", 1)[-1]
             if ext == "pdf":
+                from app.ingestion.loaders.pdf import parse_pdf
                 full_text = parse_pdf(file_path)
             elif ext in ("html", "htm"):
+                from app.ingestion.loaders.html import parse_html
                 full_text = parse_html(file_path)
             elif ext == "txt":
+                from app.ingestion.loaders.text import parse_text
                 full_text = parse_text(file_path)
             elif ext in ("docx", "pptx"):
                 from app.ingestion.loaders.office import parse_office
@@ -89,30 +93,20 @@ def process_file(file_path: str, filename: str, source_type: str):
             local_path = save_processed_locally(processed_data, source_type, filename)
             logfire.info(f"Saved processed data → {local_path}")
 
-            # 4. Embed and index in Qdrant
+            # 4. Embed (dense + BM25) and index in Qdrant
             with logfire.span("Vectorizing & Indexing"):
                 ensure_collection()
-                embeddings = embed_texts(chunks)
-                points = [
-                    models.PointStruct(
-                        id=str(uuid.uuid4()),
-                        vector=vector,
-                        payload={
-                            "text": chunk,
-                            "source": filename,
-                            "source_type": source_type,
-                        },
-                    )
-                    for chunk, vector in zip(chunks, embeddings)
-                ]
-
-                qdrant_client.upsert(
+                points = build_points(chunks, filename, source_type)
+                get_qdrant_client().upsert(
                     collection_name=settings.QDRANT_COLLECTION,
                     points=points,
                 )
                 logfire.info(f"Indexed {len(points)} points to Qdrant from {filename}.")
             return {"filename": filename, "chunks_indexed": len(chunks), "processed_path": local_path}
 
+        except CollectionSchemaError as e:
+            logfire.error(f"Failed to index {filename}: {e}")
+            return {"filename": filename, "error": "old_collection_schema", "detail": str(e)}
         except Exception as e:
             logfire.error(f"Failed to process {filename}: {e}")
             return {"filename": filename, "error": "processing_failed"}
@@ -137,24 +131,11 @@ def run_universal_ingestion(base_dir: str, explicit_source_type: str = None, wip
         # Wipe collection if requested
         if wipe:
             with logfire.span("Wiping Collection"):
-                if qdrant_client.collection_exists(settings.QDRANT_COLLECTION):
-                    qdrant_client.delete_collection(settings.QDRANT_COLLECTION)
+                if delete_collection():
                     logfire.info(f"Collection '{settings.QDRANT_COLLECTION}' deleted.")
 
-        # Recreate collection — dimension resolved at runtime after embedding model probe
-        if not qdrant_client.collection_exists(settings.QDRANT_COLLECTION):
-            dim = get_embedding_dim()
-            qdrant_client.create_collection(
-                collection_name=settings.QDRANT_COLLECTION,
-                vectors_config=models.VectorParams(
-                    size=dim,
-                    distance=models.Distance.COSINE,
-                ),
-            )
-            logfire.info(
-                f"Created collection '{settings.QDRANT_COLLECTION}' "
-                f"({dim}-dim, Cosine)."
-            )
+        # Create the collection (named dense + bm25 vectors), or fail fast on the old schema.
+        ensure_collection()
 
         # Route to sub-folders or treat the whole dir as one source
         subdirs = [
@@ -185,6 +166,7 @@ def run_universal_ingestion(base_dir: str, explicit_source_type: str = None, wip
 
 
 if __name__ == "__main__":
+    logfire.configure(service_name="enterprise-ingestion-service")
     # Usage:
     #   python -m app.ingestion.processor DATA --wipe
     #   python -m app.ingestion.processor DATA/true_data true
@@ -198,5 +180,9 @@ if __name__ == "__main__":
         print(f"Error: path '{target_dir}' does not exist.")
         sys.exit(1)
 
-    run_universal_ingestion(target_dir, explicit_source_type=explicit_type, wipe=wipe_requested)
+    try:
+        run_universal_ingestion(target_dir, explicit_source_type=explicit_type, wipe=wipe_requested)
+    except CollectionSchemaError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
     logfire.info("Ingestion job completed.")

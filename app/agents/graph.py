@@ -4,14 +4,15 @@ Self-correcting graph (Corrective RAG + Self-RAG), the default:
 
     planner ─CONVERSATIONAL─────────────────────────────▶ responder ─▶ END
     planner ─technical─▶ retriever ─▶ grader ─relevant──▶ responder ─▶ verifier ─▶ END
-                             ▲          │
-                             │          ├─none, attempts < 2─▶ rewriter ─┐
-                             └──────────┼────────────────────────────────┘
-                                        └─none, attempts ≥ 2─▶ responder ("not in the documents") ─▶ END
+                             ▲  │       │
+                             │  │       ├─none, attempts < 2─▶ rewriter ─┐
+                             └──┼───────┼────────────────────────────────┘
+                                │       └─none, attempts ≥ 2─▶ responder ("not in the documents") ─▶ END
+                                └─knowledge base unavailable (RetrievalError)─▶ END
 
 Linear graph (ENABLE_SELF_CORRECTION=false), the original pipeline:
 
-    planner ─▶ (retriever) ─▶ responder ─▶ END
+    planner ─▶ (retriever) ─▶ responder ─▶ END      (retriever ─unavailable─▶ END)
 
 Token cost of self-correction (per technical question, vs. the linear graph):
   - always:            +1 grader LLM call (one batched call for all chunks, ~1.5k input
@@ -81,7 +82,12 @@ def build_graph(
     )
 
     if not self_correction:
-        workflow.add_edge(routing.RETRIEVER, routing.RESPONDER)
+        # retriever → responder | END (knowledge base unavailable)
+        workflow.add_conditional_edges(
+            routing.RETRIEVER,
+            lambda state: routing.route_after_retriever(state, routing.RESPONDER),
+            {routing.RESPONDER: routing.RESPONDER, routing.END: END},
+        )
         workflow.add_edge(routing.RESPONDER, END)
         return workflow.compile(checkpointer=checkpointer)
 
@@ -96,7 +102,12 @@ def build_graph(
     workflow.add_node(routing.REWRITER, rewriter)
     workflow.add_node(routing.VERIFIER, verifier)
 
-    workflow.add_edge(routing.RETRIEVER, "grader")
+    # retriever → grader | END (knowledge base unavailable)
+    workflow.add_conditional_edges(
+        routing.RETRIEVER,
+        lambda state: routing.route_after_retriever(state, "grader"),
+        {"grader": "grader", routing.END: END},
+    )
     # grader → responder (relevant docs, or retries exhausted) | rewriter (try again)
     workflow.add_conditional_edges(
         "grader",

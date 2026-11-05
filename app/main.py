@@ -17,6 +17,7 @@ from app.agents.graph import get_rag_agent
 from app.ingestion.processor import process_file
 from app.schemas import MAX_QUESTION_CHARS, QueryResponse
 from app.services import rag_service
+from app.services.retrieval.schema import resolve_retrieval_mode
 
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -28,6 +29,8 @@ app = FastAPI(title="Enterprise Agentic RAG API")
 
 @app.on_event("startup")
 def startup_event():
+    # Fail fast on a mistyped RETRIEVAL_MODE instead of failing on the first query.
+    resolve_retrieval_mode()
     # Warm-up only: rag_service.answer_question() also calls ensure_rails(), which is
     # idempotent, so every entry point (API and MCP server) is guarded either way.
     rag_service.ensure_rails()
@@ -98,6 +101,8 @@ async def upload_documents(files: list[UploadFile] = File(...)):
 
         try:
             result = process_file(temporary_path, filename, source_type="uploaded")
+            if result and result.get("error") == "old_collection_schema":
+                raise HTTPException(status_code=409, detail=f"{filename}: {result['detail']}")
             if not result or result.get("error"):
                 raise HTTPException(
                     status_code=502,

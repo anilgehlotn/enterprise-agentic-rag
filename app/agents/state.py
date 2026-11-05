@@ -15,6 +15,8 @@ class AgentState(TypedDict):
     retrieval_attempts: int
     # Self-RAG: verifier verdict. None = not verified (conversational / no docs / unclear).
     grounded: Optional[bool]
+    # Set by the retriever when the knowledge base can't be searched; the graph then ends.
+    retrieval_error: Optional[str]
 
 
 def new_request_state(question: str) -> dict:
@@ -36,6 +38,7 @@ def new_request_state(question: str) -> dict:
         "final_answer": "",
         "retrieval_attempts": 0,
         "grounded": None,
+        "retrieval_error": None,
     }
 
 

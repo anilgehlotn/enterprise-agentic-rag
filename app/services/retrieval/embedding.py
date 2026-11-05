@@ -1,9 +1,10 @@
 import time
 import logfire
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.config import settings
 
 BATCH_SIZE = 50
+GEMINI_MODEL = "models/gemini-embedding-2-preview"
+FALLBACK_MODEL = "all-mpnet-base-v2"
 _GEMINI_DIM = 3072
 _FALLBACK_DIM = 768  # all-mpnet-base-v2
 
@@ -16,8 +17,11 @@ _model_type: str | None = None  # "gemini" or "fallback"
 def _probe_gemini():
     """Try one embed call to verify Gemini is reachable. Returns model or None."""
     try:
+        # Imported here so importing this module needs no Google SDK (CI, tests).
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
         model = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-2-preview",
+            model=GEMINI_MODEL,
             google_api_key=settings.GEMINI_API_KEY,
         )
         model.embed_query("probe")
@@ -31,7 +35,7 @@ def _probe_gemini():
 def _load_fallback():
     from sentence_transformers import SentenceTransformer
     logfire.info("Loading sentence-transformers fallback (all-mpnet-base-v2, 768-dim).")
-    return SentenceTransformer("all-mpnet-base-v2")
+    return SentenceTransformer(FALLBACK_MODEL)
 
 
 def _init():
@@ -55,6 +59,12 @@ def get_embedding_dim() -> int:
     """Return the vector dimension for the active model. Call after _init()."""
     _init()
     return _GEMINI_DIM if _model_type == "gemini" else _FALLBACK_DIM
+
+
+def get_embedding_model_name() -> str:
+    """Name of the active dense embedding model (initialises it on first call)."""
+    _init()
+    return GEMINI_MODEL if _model_type == "gemini" else FALLBACK_MODEL
 
 
 # ── Batch embedding with retry ─────────────────────────────────────────────────

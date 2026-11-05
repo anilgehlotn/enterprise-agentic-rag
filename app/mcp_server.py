@@ -3,7 +3,7 @@
 Exposes three READ-ONLY tools to MCP clients (Claude Desktop, Claude Code, VS Code):
 
     ask_knowledge_base      guardrails + self-correcting agent → cited, verified answer
-    search_knowledge_base   Qdrant + FlashRank evidence chunks, no LLM
+    search_knowledge_base   hybrid (dense + BM25, RRF) + FlashRank evidence chunks, no LLM
     list_indexed_documents  indexed files with chunk counts
 
 All logic lives in app.services.rag_service (shared with the FastAPI /query API).
@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas import MAX_QUESTION_CHARS, SourceChunk
 from app.services import rag_service
+from app.services.retrieval.schema import RetrievalError
 
 logger = logging.getLogger("app.mcp_server")
 
@@ -125,6 +126,13 @@ def _service_failure(action: str) -> ToolError:
     )
 
 
+KNOWLEDGE_BASE_UNAVAILABLE_TOOL_ERROR = (
+    "The knowledge base is temporarily unavailable (the vector database or embedding "
+    "service could not be reached), so no search was performed. This is not an empty "
+    "result. Please try again in a few minutes."
+)
+
+
 # ── Server and tools ─────────────────────────────────────────────────────────
 
 mcp = MCPServer(
@@ -196,8 +204,8 @@ def ask_knowledge_base(
     annotations=READ_ONLY,
     description=(
         f"Semantic search over the enterprise knowledge base. {KNOWLEDGE_SCOPE}\n\n"
-        "Returns the top_k most relevant raw text chunks (vector search + cross-encoder "
-        "rerank) with their source file and scores. No LLM is called: fast and cheap, but "
+        "Returns the top_k most relevant raw text chunks (hybrid semantic + BM25 keyword "
+        "search fused with RRF, then a cross-encoder rerank) with their source file and scores. No LLM is called: fast and cheap, but "
         "no answer is written and nothing is fact-checked.\n\n"
         "Prefer this to look up or quote exact passages, compare sources, or check whether "
         "a topic is covered at all. Prefer ask_knowledge_base for an explained, cited answer. "
@@ -225,6 +233,9 @@ def search_knowledge_base(
 
     try:
         results = rag_service.search_knowledge(query, top_k)
+    except RetrievalError:
+        logger.exception("Knowledge base unavailable during search_knowledge_base")
+        raise ToolError(KNOWLEDGE_BASE_UNAVAILABLE_TOOL_ERROR)
     except Exception:
         raise _service_failure("searching the knowledge base")
 

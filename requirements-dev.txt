@@ -11,3 +11,7 @@ python-dotenv==1.2.2
 # (httpx isn't listed, python-multipart is unpinned); pinned to the resolved versions.
 httpx==0.28.1
 python-multipart==0.0.33
+# Retrieval tests build real Qdrant request models (Prefetch, FusionQuery, SparseVector);
+# the client itself is mocked. Pinned to match requirements-prod.txt. fastembed is NOT
+# needed: tests mock the sparse embedder.
+qdrant-client==1.17.1

@@ -11,7 +11,10 @@ class Settings:
     # --- VECTOR DB (QDRANT) ---
     QDRANT_URL = os.getenv("QDRANT_CLUSTER_ENDPOINT")
     QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-    QDRANT_COLLECTION = "enterprise_rag"
+    # Use a new name whenever the vector schema changes (e.g. enterprise_rag_v2 for the
+    # hybrid dense + bm25 layout), so an older deployment keeps serving its old collection.
+    # An empty value falls back to the default.
+    QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION") or "enterprise_rag"
 
     # --- REASONING ENGINE (GROQ) ---
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")

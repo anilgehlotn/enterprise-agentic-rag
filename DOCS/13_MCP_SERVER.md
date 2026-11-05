@@ -73,7 +73,7 @@ Example output (`structuredContent`):
 
 ### `search_knowledge_base`
 
-Vector search (Qdrant) + cross-encoder rerank (FlashRank). **No LLM call**: fast, cheap, nothing generated or fact-checked. Use it to read or quote raw passages, or to check whether a topic is covered at all.
+Hybrid search (Qdrant dense + BM25, fused with RRF; dense only with `RETRIEVAL_MODE=dense`) + cross-encoder rerank (FlashRank). **No LLM call**: fast, cheap, nothing generated or fact-checked. Use it to read or quote raw passages, or to check whether a topic is covered at all. If Qdrant or the embedding service is down it returns a "temporarily unavailable" tool error, never an empty result list.
 
 | Argument | Type | Default | Rules |
 |---|---|---|---|

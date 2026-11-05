@@ -166,10 +166,11 @@ def test_responder_prompt_numbers_sources_and_requires_inline_citations():
 
 def test_retriever_increments_attempts_and_logs_the_step(monkeypatch):
     searched = []
+    monkeypatch.delenv("RETRIEVAL_MODE", raising=False)
     monkeypatch.setitem(
         sys.modules,
         "app.services.retrieval.qdrant_service",
-        SimpleNamespace(search_enterprise_knowledge=lambda q, limit: searched.append(q) or DOCS),
+        SimpleNamespace(search_enterprise_knowledge=lambda q, limit, mode: searched.append((q, mode)) or DOCS),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -180,7 +181,7 @@ def test_retriever_increments_attempts_and_logs_the_step(monkeypatch):
 
     update = retriever.retrieve_node(state)
 
-    assert searched == ["cronjob schedule syntax"]
+    assert searched == [("cronjob schedule syntax", "hybrid")]
     assert update["retrieval_attempts"] == 2
     assert update["documents"] == DOCS
-    assert update["plan"][-1] == "Retrieval attempt 2/2: 3 chunks retrieved for 'cronjob schedule syntax'"
+    assert update["plan"][-1] == "Retrieval attempt 2/2 (hybrid): 3 chunks retrieved for 'cronjob schedule syntax'"

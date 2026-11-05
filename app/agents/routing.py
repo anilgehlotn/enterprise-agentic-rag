@@ -75,6 +75,19 @@ def extract_json_object(raw: str | None) -> dict | None:
     return None
 
 
+# ── Retriever ──────────────────────────────────────────────────────────────────
+
+def route_after_retriever(state: dict, next_node: str) -> str:
+    """
+    retriever → END when the knowledge base was unreachable (the retriever already
+    wrote the "unavailable" answer); → next_node (grader, or responder in the linear
+    graph) otherwise. An outage must not look like "no results" and trigger a rewrite.
+    """
+    if state.get("retrieval_error"):
+        return END
+    return next_node
+
+
 # ── Grader ─────────────────────────────────────────────────────────────────────
 
 def _as_index(value) -> int | None:

@@ -94,8 +94,12 @@ def answer_question(question: str, thread_id: str | None) -> dict[str, Any]:
 
 def search_knowledge(query: str, top_k: int) -> list[dict[str, Any]]:
     """
-    Vector search (Qdrant) + FlashRank rerank, formatted with build_citations().
+    Knowledge-base search (hybrid dense + BM25 with RRF, or dense only, per
+    RETRIEVAL_MODE) + FlashRank rerank, formatted with build_citations().
     No LLM call: cheap, fast, deterministic evidence lookup.
+
+    Raises RetrievalError when Qdrant / embeddings are unreachable, so callers can
+    tell an outage apart from "nothing matched" ([]).
     """
     from app.services.retrieval.qdrant_service import search_enterprise_knowledge
     from app.services.retrieval.ranking_service import rerank_records
