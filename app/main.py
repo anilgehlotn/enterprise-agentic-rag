@@ -13,10 +13,11 @@ logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
 
 # Now safe to import app modules - logfire is already active
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
-from app.agents.graph import rag_agent
+from app.agents.graph import get_rag_agent
+from app.agents.state import new_request_state
 from app.guardrails import initialize_rails, guard
 from app.ingestion.processor import process_file
-from app.schemas import SourceChunk
+from app.schemas import QueryResponse
 from app.services.retrieval.citations import build_citations
 
 from pydantic import BaseModel, Field
@@ -34,14 +35,6 @@ def startup_event():
 class QueryRequest(BaseModel):
     q: str = Field(min_length=1, max_length=4_000, description="The user's question")
     thread_id: Optional[str] = "default_user"
-
-
-class QueryResponse(BaseModel):
-    question: str
-    answer: str
-    thought_process: list[str]
-    status: str
-    sources: list[SourceChunk]
 
 
 class UploadResult(BaseModel):
@@ -71,7 +64,7 @@ def get_graph_image():
     Returns the Mermaid image of the agent's workflow.
     """
     try:
-        png_bytes = rag_agent.get_graph().draw_mermaid_png()
+        png_bytes = get_rag_agent().get_graph().draw_mermaid_png()
         return Response(content=png_bytes, media_type="image/png")
     except Exception as e:
         return {"error": f"Could not generate graph image: {e}"}
@@ -125,13 +118,9 @@ def query(request: QueryRequest):
     q = request.q
     thread_id = request.thread_id
 
-    initial_state = {
-        "messages": [{"role": "user", "content": q}],
-        "current_query": q,
-        "documents": [],
-        "plan": ["Start"],
-        "status": "Initializing Graph..."
-    }
+    # Resets every per-request field (retrieval_attempts, grounded, documents, plan…)
+    # so values checkpointed by MemorySaver for this thread don't leak into this run.
+    initial_state = new_request_state(q)
     
     # Configuration for Memory (Thread ID)
     config = {"configurable": {"thread_id": thread_id}}
@@ -151,14 +140,15 @@ def query(request: QueryRequest):
 
         # Gate 2: LangGraph RAG pipeline
         # Run the graph synchronously to preserve Logfire context variables
-        final_output = rag_agent.invoke(initial_state, config=config)
+        final_output = get_rag_agent().invoke(initial_state, config=config)
         
         return {
             "question": q,
             "answer": final_output.get("final_answer"),
             "thought_process": final_output.get("plan"),
             "status": final_output.get("status"),
-            "sources": build_citations(final_output.get("documents", []))
+            "sources": build_citations(final_output.get("documents", [])),
+            "grounded": final_output.get("grounded"),
         }
     except Exception as e:
         logfire.error(f"❌ Backend Execution Failed: {e}")

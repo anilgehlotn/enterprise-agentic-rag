@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import logfire
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -5,11 +7,13 @@ from app.config import settings
 from app.services.retrieval.embedding import embed_query
 
 
-# Initialize Qdrant Client
-client = QdrantClient(
-    url=settings.QDRANT_URL,
-    api_key=settings.QDRANT_API_KEY
-)
+@lru_cache(maxsize=1)
+def get_qdrant_client() -> QdrantClient:
+    """Qdrant client, created on first search (not at import time)."""
+    return QdrantClient(
+        url=settings.QDRANT_URL,
+        api_key=settings.QDRANT_API_KEY
+    )
 
 def search_enterprise_knowledge(query: str, limit: int = 8):
     """
@@ -20,7 +24,7 @@ def search_enterprise_knowledge(query: str, limit: int = 8):
         query_vector = embed_query(query)
 
         # Using query_points - the modern standard for Qdrant
-        response = client.query_points(
+        response = get_qdrant_client().query_points(
             collection_name=settings.QDRANT_COLLECTION,
             query=query_vector,
             limit=limit,
