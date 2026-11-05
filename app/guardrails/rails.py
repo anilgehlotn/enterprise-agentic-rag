@@ -1,3 +1,5 @@
+import threading
+
 import logfire
 from langchain_groq import ChatGroq
 from nemoguardrails import RailsConfig, LLMRails
@@ -7,6 +9,7 @@ from app.guardrails.colang_rules import COLANG_CONTENT, YAML_CONTENT, RAIL_INDIC
 
 
 _rails: LLMRails | None = None
+_init_lock = threading.Lock()
 
 
 def initialize_rails() -> None:
@@ -32,6 +35,19 @@ def initialize_rails() -> None:
     logfire.info("🛡️ NeMo Guardrails initialised (llama-3.1-8b-instant).")
     
     
+
+
+def ensure_rails() -> None:
+    """
+    Lazy, idempotent, thread-safe initialisation. Safe to call from every entry
+    point (FastAPI startup, /query, the MCP server): only the first successful
+    call builds the rails. If it raises, the next call retries.
+    """
+    if _rails is not None:
+        return
+    with _init_lock:
+        if _rails is None:
+            initialize_rails()
 
 
 def guard(message: str) -> tuple[bool, str | None]:

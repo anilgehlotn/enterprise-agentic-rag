@@ -73,6 +73,7 @@ app/
   guardrails/    NeMo safety policies
   gateway/       Portkey-backed LLM client
   main.py        FastAPI application
+  mcp_server.py  MCP server (read-only tools for Claude Desktop / Claude Code)
 ui/              Streamlit chat experience
 evals/           Golden dataset, evaluation pipeline, and metrics dashboard
 tests/           Fast unit tests for core retrieval utilities
@@ -129,6 +130,18 @@ Confirm the API is ready:
 curl http://localhost:8000/health
 ```
 
+## MCP server
+
+The knowledge base is also available as a [Model Context Protocol](https://modelcontextprotocol.io) server, so MCP clients such as Claude Desktop, Claude Code and VS Code can use it as a tool. It exposes three read-only tools: `ask_knowledge_base` (guardrails + self-correcting agent, cited and verified answer), `search_knowledge_base` (reranked evidence, no LLM) and `list_indexed_documents`.
+
+```bash
+python -m app.mcp_server                                           # stdio, for Claude Desktop / Claude Code
+python -m app.mcp_server --transport http --host 127.0.0.1 --port 8001   # streamable HTTP
+claude mcp add enterprise-rag --env PYTHONPATH=$PWD -- $PWD/.venv/bin/python -m app.mcp_server
+```
+
+See the [MCP server guide](DOCS/13_MCP_SERVER.md) for Claude Desktop config, MCP Inspector and security notes.
+
 ## Quality checks
 
 ```bash
@@ -155,6 +168,7 @@ The public Streamlit experience is available at [anil-enterprise-rag.streamlit.a
 - [LLM gateway](DOCS/09_LLM_GATEWAY.md)
 - [Evaluation methodology](DOCS/10_EVALS.md)
 - [Deployment and interview demo](DOCS/12_DEPLOYMENT_AND_DEMO.md)
+- [MCP server](DOCS/13_MCP_SERVER.md)
 - [Project guide](DOCS/PROJECT_GUIDE.md)
 
 

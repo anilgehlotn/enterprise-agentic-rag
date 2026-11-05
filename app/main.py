@@ -14,11 +14,9 @@ logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
 # Now safe to import app modules - logfire is already active
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from app.agents.graph import get_rag_agent
-from app.agents.state import new_request_state
-from app.guardrails import initialize_rails, guard
 from app.ingestion.processor import process_file
-from app.schemas import QueryResponse
-from app.services.retrieval.citations import build_citations
+from app.schemas import MAX_QUESTION_CHARS, QueryResponse
+from app.services import rag_service
 
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -30,10 +28,12 @@ app = FastAPI(title="Enterprise Agentic RAG API")
 
 @app.on_event("startup")
 def startup_event():
-    initialize_rails()
+    # Warm-up only: rag_service.answer_question() also calls ensure_rails(), which is
+    # idempotent, so every entry point (API and MCP server) is guarded either way.
+    rag_service.ensure_rails()
 
 class QueryRequest(BaseModel):
-    q: str = Field(min_length=1, max_length=4_000, description="The user's question")
+    q: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS, description="The user's question")
     thread_id: Optional[str] = "default_user"
 
 
@@ -113,49 +113,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
 @app.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest):
     """
-    Executes the LangGraph RAG flow with memory using a POST request.
+    Executes the guardrails gate + LangGraph RAG flow with memory.
+    The logic lives in app.services.rag_service so the MCP server shares it.
     """
-    q = request.q
-    thread_id = request.thread_id
-
-    # Resets every per-request field (retrieval_attempts, grounded, documents, plan…)
-    # so values checkpointed by MemorySaver for this thread don't leak into this run.
-    initial_state = new_request_state(q)
-    
-    # Configuration for Memory (Thread ID)
-    config = {"configurable": {"thread_id": thread_id}}
-    
-    try:
-        # Gate 1: NeMo Guardrails — blocks off-topic, jailbreaks, and handles dialog
-        rail_fired, rail_response = guard(q)
-        if rail_fired:
-            logfire.info(f"🛡️ Request blocked by guardrails | thread={thread_id}")
-            return {
-                "question": q,
-                "answer": rail_response,
-                "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
-                "status": "Blocked by guardrails.",
-                "sources": []
-            }
-
-        # Gate 2: LangGraph RAG pipeline
-        # Run the graph synchronously to preserve Logfire context variables
-        final_output = get_rag_agent().invoke(initial_state, config=config)
-        
-        return {
-            "question": q,
-            "answer": final_output.get("final_answer"),
-            "thought_process": final_output.get("plan"),
-            "status": final_output.get("status"),
-            "sources": build_citations(final_output.get("documents", [])),
-            "grounded": final_output.get("grounded"),
-        }
-    except Exception as e:
-        logfire.error(f"❌ Backend Execution Failed: {e}")
-        return {
-            "question": q,
-            "answer": "I apologize, but I encountered an internal error while processing your request. Please try again later.",
-            "thought_process": ["Error encountered during execution."],
-            "status": "error",
-            "sources": []
-        }
+    return rag_service.answer_question(request.q, request.thread_id)
