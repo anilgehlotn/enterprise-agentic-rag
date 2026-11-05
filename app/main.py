@@ -16,6 +16,7 @@ from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from app.agents.graph import rag_agent
 from app.guardrails import initialize_rails, guard
 from app.ingestion.processor import process_file
+from app.schemas import SourceChunk
 from app.services.retrieval.citations import build_citations
 
 from pydantic import BaseModel, Field
@@ -33,14 +34,6 @@ def startup_event():
 class QueryRequest(BaseModel):
     q: str = Field(min_length=1, max_length=4_000, description="The user's question")
     thread_id: Optional[str] = "default_user"
-
-
-class SourceChunk(BaseModel):
-    source: str
-    source_type: str = "unknown"
-    content: str
-    rerank_score: Optional[float] = None
-    score: Optional[float] = None
 
 
 class QueryResponse(BaseModel):

@@ -15,6 +15,7 @@ import logfire
 
 API_URL = "http://localhost:8000/query"
 RESPONSE_TRUNCATE = 300
+CONTEXT_LIMIT = 5          # number of retrieved source chunks kept per sample
 DELAY_BETWEEN_CALLS = 10   # seconds — stays within Groq RPM on the main key
 REQUEST_TIMEOUT = 120      # seconds — guardrails + LangGraph + Groq can take >60s
 
@@ -36,6 +37,26 @@ def detect_tool(thought_process: list) -> str:
     if "conversational" in joined or "memory" in joined:
         return "direct_answer"
     return "unknown"
+
+
+def extract_context_texts(sources: list, limit: int = CONTEXT_LIMIT) -> list[str]:
+    """
+    Converts /query `sources` (citation dicts) into the plain strings that
+    evals.metrics expects in actual_contexts. Empty chunks are dropped.
+    """
+    texts: list[str] = []
+    for source in sources:
+        if isinstance(source, dict):
+            text = source.get("content") or ""
+        elif isinstance(source, str):
+            text = source
+        else:
+            continue
+        if text.strip():
+            texts.append(text)
+        if len(texts) >= limit:
+            break
+    return texts
 
 
 def run_pipeline(golden_dataset: dict, progress_callback=None) -> dict:
@@ -74,7 +95,7 @@ def run_pipeline(golden_dataset: dict, progress_callback=None) -> dict:
                     sources = data.get("sources") or []
 
                     sample["actual_response"] = raw_answer[:RESPONSE_TRUNCATE]
-                    sample["actual_contexts"] = sources[:5]
+                    sample["actual_contexts"] = extract_context_texts(sources)
                     sample["actual_tools_called"] = [detect_tool(thought_process)]
 
                     logfire.info(

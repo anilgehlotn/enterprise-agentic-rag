@@ -1,4 +1,5 @@
 from app.agents.state import AgentState
+from app.agents.routing import CONVERSATIONAL, normalize_planner_decision
 from app.gateway import get_langchain_llm
 import logfire
 
@@ -35,12 +36,13 @@ def planner_node(state: AgentState):
     """
     
     with logfire.span("🧠 Planner Decision"):
-        decision = llm.invoke(prompt).content.strip()
-        logfire.info(f"Intent identified: {decision}")
-    
-    if decision == "CONVERSATIONAL":
+        raw_decision = llm.invoke(prompt).content
+        decision = normalize_planner_decision(raw_decision)
+        logfire.info(f"Intent identified: {decision}", raw_decision=raw_decision)
+
+    if decision == CONVERSATIONAL:
         return {
-            "current_query": "CONVERSATIONAL",
+            "current_query": CONVERSATIONAL,
             "status": "Handling conversationally (using memory)...",
             "plan": ["Intent: Conversational/Memory", "Retrieval: Skipped"]
         }

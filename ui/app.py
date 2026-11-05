@@ -193,7 +193,9 @@ if prompt := st.chat_input("Ask a question about your knowledge sources…"):
                             for i, source in enumerate(sources):
                                 source_name = source.get("source", "Unknown source")
                                 content = source.get("content", "")
-                                score = source.get("rerank_score") or source.get("score")
+                                score = source.get("rerank_score")
+                                if score is None:
+                                    score = source.get("retrieval_score")
                                 score_label = f" | relevance: {score:.3f}" if isinstance(score, float) else ""
                                 with st.expander(f"{i+1}. {source_name}{score_label}"):
                                     st.caption(f"Type: {source.get('source_type', 'unknown')}")
