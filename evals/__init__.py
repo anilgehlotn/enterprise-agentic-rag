@@ -1,3 +1,6 @@
-from evals.pipeline import run_pipeline, load_golden_dataset
-from evals.guardrails_eval import run_guardrails_eval, compute_guardrails_metrics
-from evals.metrics import run_all_metrics
+"""Evaluation suite for the RAG API.
+
+Import the submodules you need directly (evals.pipeline, evals.guardrails_eval,
+evals.metrics). Nothing is re-exported here so that importing a lightweight
+module such as evals.pipeline does not pull in ragas via evals.metrics.
+"""

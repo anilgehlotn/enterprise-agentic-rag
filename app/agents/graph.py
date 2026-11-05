@@ -4,6 +4,7 @@ from app.agents.state import AgentState
 from app.agents.nodes.planner import planner_node
 from app.agents.nodes.retriever import retrieve_node
 from app.agents.nodes.responder import generate_node
+from app.agents.routing import route_planner
 
 
 # 1. Initialize the State Graph
@@ -16,14 +17,8 @@ workflow.add_node("retriever", retrieve_node)
 workflow.add_node("responder", generate_node)
 
 # 3. Define the Edges & Routing Logic
-def route_planner(state: AgentState):
-    """
-    Routes the workflow based on the planner's decision.
-    """
-    if state["current_query"] == "CONVERSATIONAL":
-        return "responder"
-    return "retriever"
-
+# route_planner lives in app.agents.routing (pure, unit-tested); it tolerates
+# decorated planner output such as "CONVERSATIONAL." or '"CONVERSATIONAL"'.
 workflow.set_entry_point("planner")
 
 
