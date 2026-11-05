@@ -25,14 +25,19 @@ REQUEST_TIMEOUT = 120      # seconds — guardrails + LangGraph + Groq can take 
 def detect_tool(thought_process: list) -> str:
     """
     Maps the thought_process list from /query response to a tool name.
-    Planner sets:  'Intent: Technical' + 'Search Term: ...' → retrieve_documents
-                   'Intent: Conversational/Memory'           → direct_answer
-    main.py sets:  'Intent: Guardrails Fired'                → guardrails
+    Planner sets:   'Intent: Technical' + 'Search Term: ...' → retrieve_documents
+                    'Intent: Conversational/Memory'           → direct_answer
+    Retriever sets: 'Retrieval attempt n/2: ...'              → retrieve_documents
+                    (grader / rewriter / verifier steps only follow a retrieval)
+    main.py sets:   'Intent: Guardrails Fired'                → guardrails
+    Technical markers are checked before 'memory', because a rewritten search
+    query such as 'kubernetes memory limits' would otherwise look conversational.
     """
     joined = " ".join(thought_process).lower()
     if "guardrails fired" in joined:
         return "guardrails"
-    if "intent: technical" in joined or "search term:" in joined or "context retrieved" in joined:
+    technical_markers = ("intent: technical", "search term:", "retrieval attempt", "context retrieved")
+    if any(marker in joined for marker in technical_markers):
         return "retrieve_documents"
     if "conversational" in joined or "memory" in joined:
         return "direct_answer"

@@ -14,3 +14,14 @@ class SourceChunk(BaseModel):
     preview: str = ""
     retrieval_score: Optional[float] = None
     rerank_score: Optional[float] = None
+
+
+class QueryResponse(BaseModel):
+    question: str
+    answer: str
+    thought_process: list[str]
+    status: str
+    sources: list[SourceChunk]
+    # Self-RAG verifier verdict: True = supported by sources, False = not fully
+    # supported, None = not verified (conversational, no documents, blocked, unclear).
+    grounded: Optional[bool] = None

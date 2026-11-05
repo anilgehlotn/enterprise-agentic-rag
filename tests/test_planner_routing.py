@@ -1,5 +1,3 @@
-import importlib
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -55,13 +53,13 @@ def test_empty_output_is_not_conversational(raw):
     assert route_planner({"current_query": raw}) == "retriever"
 
 
-def _load_planner_with_fake_llm(monkeypatch, llm_output):
-    """Import planner.py with app.gateway stubbed so no LLM client or network is created."""
+def _planner_with_fake_llm(monkeypatch, llm_output):
+    """planner.py builds its LLM lazily via get_llm(); swap that for a fake (no keys, no network)."""
+    from app.agents.nodes import planner
+
     fake_llm = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content=llm_output))
-    fake_gateway = SimpleNamespace(get_langchain_llm=lambda **kwargs: fake_llm)
-    monkeypatch.setitem(sys.modules, "app.gateway", fake_gateway)
-    monkeypatch.delitem(sys.modules, "app.agents.nodes.planner", raising=False)
-    return importlib.import_module("app.agents.nodes.planner")
+    monkeypatch.setattr(planner, "get_llm", lambda feature: fake_llm)
+    return planner
 
 
 def _state():
@@ -70,7 +68,7 @@ def _state():
 
 @pytest.mark.parametrize("llm_output", ["CONVERSATIONAL.", '"CONVERSATIONAL"', " conversational \n"])
 def test_planner_node_normalises_conversational(monkeypatch, llm_output):
-    planner = _load_planner_with_fake_llm(monkeypatch, llm_output)
+    planner = _planner_with_fake_llm(monkeypatch, llm_output)
 
     update = planner.planner_node(_state())
 
@@ -80,7 +78,7 @@ def test_planner_node_normalises_conversational(monkeypatch, llm_output):
 
 
 def test_planner_node_returns_clean_search_query(monkeypatch):
-    planner = _load_planner_with_fake_llm(monkeypatch, '"kubernetes job backoffLimit"\n')
+    planner = _planner_with_fake_llm(monkeypatch, '"kubernetes job backoffLimit"\n')
 
     update = planner.planner_node(_state())
 

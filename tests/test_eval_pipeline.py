@@ -84,3 +84,34 @@ def test_run_pipeline_handles_no_sources(monkeypatch, sources):
     result = run_pipeline({"rag_samples": [{"question": "hello"}]})
 
     assert result["rag_samples"][0]["actual_contexts"] == []
+
+
+# ── detect_tool with the self-correcting agent's thought_process ─────────────
+
+from evals.pipeline import detect_tool
+
+
+@pytest.mark.parametrize(
+    "thought_process, expected",
+    [
+        # happy path
+        (["Intent: Technical", "Search Term: cronjob", "Retrieval attempt 1/2: 5 chunks retrieved for 'cronjob'",
+          "Grading (attempt 1): 3/5 chunks relevant", "Verification: answer supported by sources ✅"],
+         "retrieve_documents"),
+        # corrective path whose rewritten query mentions "memory"
+        (["Intent: Technical", "Search Term: pod limits", "Retrieval attempt 1/2: 5 chunks retrieved for 'pod limits'",
+          "Grading (attempt 1): 0/5 chunks relevant",
+          "Query rewrite: 'pod limits' → 'kubernetes container memory limits'",
+          "Retrieval attempt 2/2: 5 chunks retrieved for 'kubernetes container memory limits'",
+          "Grading (attempt 2): 0/5 chunks relevant", "Answer: indexed documents don't cover this question"],
+         "retrieve_documents"),
+        # retrieval steps alone are enough
+        (["Retrieval attempt 1/2: 0 chunks retrieved for 'x'"], "retrieve_documents"),
+        # conversational (+ cache hit)
+        (["Intent: Conversational/Memory", "Retrieval: Skipped", "Cache: Hit ⚡"], "direct_answer"),
+        (["Intent: Guardrails Fired", "Retrieval: Skipped"], "guardrails"),
+        (["Error encountered during execution."], "unknown"),
+    ],
+)
+def test_detect_tool_classifies_self_correcting_plans(thought_process, expected):
+    assert detect_tool(thought_process) == expected

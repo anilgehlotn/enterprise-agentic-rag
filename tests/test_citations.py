@@ -1,4 +1,4 @@
-from app.schemas import SourceChunk
+from app.schemas import QueryResponse, SourceChunk
 from app.services.retrieval.citations import build_citations, format_context
 
 
@@ -7,8 +7,36 @@ def test_format_context_includes_source_labels():
         {"source": "kubernetes.html", "content": "A Job creates one or more Pods."}
     ])
 
-    assert "[Source: kubernetes.html]" in context
+    assert "[1] Source: kubernetes.html" in context
     assert "A Job creates one or more Pods." in context
+
+
+def test_format_context_numbers_sources_in_order():
+    context = format_context([
+        {"source": "jobs.html", "content": "Jobs run to completion."},
+        {"source": "cron.docx", "content": "CronJobs run on a schedule."},
+    ])
+
+    assert context == (
+        "[1] Source: jobs.html\nJobs run to completion.\n\n"
+        "[2] Source: cron.docx\nCronJobs run on a schedule."
+    )
+
+
+def test_context_numbers_match_citation_positions_when_chunks_are_empty():
+    """[n] cited in the answer must be sources[n-1] in the API response."""
+    records = [
+        {"source": "a.txt", "content": "Alpha."},
+        {"source": "empty.txt", "content": "   "},
+        {"source": "b.txt", "content": "Beta."},
+    ]
+
+    context = format_context(records)
+    citations = build_citations(records)
+
+    assert "[2] Source: b.txt" in context
+    assert "empty.txt" not in context
+    assert citations[1]["source"] == "b.txt"
 
 
 def test_build_citations_preserves_retrieval_metadata():
@@ -57,3 +85,11 @@ def test_source_chunk_allows_missing_scores():
 
     assert chunk.retrieval_score is None
     assert chunk.rerank_score is None
+
+
+def test_query_response_exposes_grounded_and_defaults_to_none():
+    base = {"question": "q", "answer": "a", "thought_process": [], "status": "ok", "sources": []}
+
+    assert QueryResponse(**base).grounded is None
+    assert QueryResponse(**base, grounded=True).grounded is True
+    assert QueryResponse(**base, grounded=False).model_dump()["grounded"] is False

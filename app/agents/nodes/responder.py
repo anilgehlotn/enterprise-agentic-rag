@@ -1,7 +1,41 @@
 import logfire
-from app.agents.state import AgentState
-from app.gateway import portkey_client, extract_cache_status
+from app.agents.routing import is_conversational
+from app.agents.state import AgentState, conversation_history, latest_user_question
 from app.services.retrieval.citations import format_context
+
+
+def no_evidence_answer(question: str) -> str:
+    """
+    Fixed reply when retrieval (after any rewrite) found no relevant documents.
+    Deliberately not LLM-generated: the model must not fall back to general
+    knowledge, and this path costs no tokens.
+    """
+    return (
+        "I couldn't find this in the indexed documents, so I won't answer from general "
+        f"knowledge. The current knowledge base doesn't appear to cover: \"{question}\".\n\n"
+        "If you have a document that covers it, upload it with **Upload files** and ask again."
+    )
+
+
+def build_technical_prompt(documents: list[dict], history: str, question: str) -> str:
+    return f"""
+        You are a Senior Technical Architect.
+        Answer the question using ONLY the numbered TECHNICAL CONTEXT below.
+
+        Citation rules:
+        - After each claim, cite the source(s) it comes from inline, like [1] or [2][3].
+        - Only use the numbers shown in the context. Never invent a source number.
+        - If the context does not contain the answer, say so instead of using outside knowledge.
+
+        TECHNICAL CONTEXT:
+        {format_context(documents)}
+
+        CONVERSATION HISTORY:
+        {history}
+
+        USER QUESTION:
+        "{question}"
+        """
 
 
 def generate_node(state: AgentState):
@@ -10,16 +44,11 @@ def generate_node(state: AgentState):
     Uses the native Portkey client (not LangChain) so we can read the
     x-portkey-cache-status response header and surface Cache: Hit in the UI.
     """
-    query = state["current_query"]
+    history_str = conversation_history(state)
+    user_msg = latest_user_question(state)
+    documents = state.get("documents") or []
 
-    history_str = ""
-    for msg in state["messages"][:-1]:
-        role = "User" if msg["role"] == "user" else "Assistant"
-        history_str += f"{role}: {msg['content']}\n"
-
-    user_msg = state["messages"][-1]["content"] if state["messages"] else ""
-
-    if query == "CONVERSATIONAL":
+    if is_conversational(state.get("current_query")):
         logfire.info("Generating conversational response using memory.")
         prompt = f"""
         You are a friendly and helpful Enterprise AI Assistant.
@@ -31,27 +60,26 @@ def generate_node(state: AgentState):
         LATEST MESSAGE:
         "{user_msg}"
         """
+    elif not documents:
+        logfire.info("No relevant documents; returning the no-evidence answer.")
+        content = no_evidence_answer(user_msg)
+        return {
+            "final_answer": content,
+            "grounded": None,
+            "status": "No relevant documents found.",
+            "plan": state["plan"] + ["Answer: indexed documents don't cover this question"],
+            "messages": [{"role": "assistant", "content": content}],
+        }
     else:
         logfire.info("Generating technical RAG response.")
-        full_context = format_context(state["documents"])
+        prompt = build_technical_prompt(documents, history_str, user_msg)
 
-        prompt = f"""
-        You are a Senior Technical Architect.
-        Answer the question using the TECHNICAL CONTEXT provided.
-
-        TECHNICAL CONTEXT:
-        {full_context}
-
-        CONVERSATION HISTORY:
-        {history_str}
-
-        USER QUESTION:
-        "{user_msg}"
-        """
+    # Imported lazily so importing this module needs no Portkey client or API key.
+    from app.gateway import extract_cache_status, get_portkey_client
 
     with logfire.span("✍️ LLM Synthesis"):
         try:
-            response = portkey_client.chat.completions.create(
+            response = get_portkey_client().chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1
             )

@@ -4,9 +4,16 @@ from typing import Any
 
 
 def format_context(records: list[dict[str, Any]], max_chars: int = 25_000) -> str:
-    """Build an attributed prompt context without exceeding the model budget."""
+    """
+    Build a numbered, attributed prompt context without exceeding the model budget.
+
+    Sources are numbered [1], [2], ... so the LLM can cite them inline. Numbering
+    skips empty chunks exactly like build_citations(), so [n] in the answer is
+    the n-th entry of the API's `sources` list.
+    """
     sections: list[str] = []
     current_length = 0
+    number = 0
 
     for record in records:
         source = record.get("source", "Unknown source")
@@ -14,7 +21,8 @@ def format_context(records: list[dict[str, Any]], max_chars: int = 25_000) -> st
         if not content:
             continue
 
-        section = f"[Source: {source}]\n{content}"
+        number += 1
+        section = f"[{number}] Source: {source}\n{content}"
         if current_length + len(section) > max_chars:
             break
         sections.append(section)

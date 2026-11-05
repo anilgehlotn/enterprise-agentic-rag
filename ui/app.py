@@ -71,6 +71,20 @@ def _backend_url() -> str:
     return os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
 
 
+# Self-RAG verifier verdict → badge under technical answers (None → no badge).
+GROUNDED_BADGES = {
+    True: ("success", "✅ Verified against sources"),
+    False: ("warning", "⚠️ Not fully supported by sources"),
+}
+
+
+def render_grounded_badge(grounded) -> None:
+    badge = GROUNDED_BADGES.get(grounded) if isinstance(grounded, bool) else None
+    if badge:
+        kind, label = badge
+        getattr(st, kind)(label)
+
+
 @st.dialog("Upload and attach files", width="large")
 def upload_documents_dialog():
     st.caption("Add knowledge sources to the workspace. Files are indexed with source metadata for traceable answers.")
@@ -157,6 +171,7 @@ for message in st.session_state.messages:
     avatar = AI_AVATAR if message["role"] == "assistant" else USER_AVATAR
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
+        render_grounded_badge(message.get("grounded"))
 
 # Chat Input
 if prompt := st.chat_input("Ask a question about your knowledge sources…"):
@@ -176,11 +191,13 @@ if prompt := st.chat_input("Ask a question about your knowledge sources…"):
                         # Get backend URL from env, or default to local if not set
                         url = f"{_backend_url()}/query"
                         payload = {"q": prompt, "thread_id": st.session_state.session_id}
-                        response = requests.post(url, json=payload, timeout=60)
+                        # Self-correction can add grading, a rewrite + second retrieval, and verification.
+                        response = requests.post(url, json=payload, timeout=120)
                         data = response.json()
                     
-                    # Show Reasoning Steps from Backend
-                    steps = data.get("thought_process", [])
+                    # Show Reasoning Steps from Backend (intent, each retrieval attempt,
+                    # grading result, query rewrite, verification)
+                    steps = data.get("thought_process") or []
                     for step in steps:
                         st.write(f"⚙️ {step}")
                     
@@ -197,7 +214,8 @@ if prompt := st.chat_input("Ask a question about your knowledge sources…"):
                                 if score is None:
                                     score = source.get("retrieval_score")
                                 score_label = f" | relevance: {score:.3f}" if isinstance(score, float) else ""
-                                with st.expander(f"{i+1}. {source_name}{score_label}"):
+                                # [n] matches the inline citations in the answer.
+                                with st.expander(f"[{i+1}] {source_name}{score_label}"):
                                     st.caption(f"Type: {source.get('source_type', 'unknown')}")
                                     st.info(content)
                 except Exception as e:
@@ -217,5 +235,9 @@ if prompt := st.chat_input("Ask a question about your knowledge sources…"):
                 time.sleep(0.005)
             
             answer_placeholder.markdown(full_answer)
-            st.session_state.messages.append({"role": "assistant", "content": full_answer})
+            grounded = data.get("grounded")
+            render_grounded_badge(grounded)
+            st.session_state.messages.append(
+                {"role": "assistant", "content": full_answer, "grounded": grounded}
+            )
             logfire.info("✅ Chat cycle completed successfully.")

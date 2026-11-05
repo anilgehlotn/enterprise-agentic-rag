@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import logfire
 from portkey_ai import Portkey, createHeaders, PORTKEY_GATEWAY_URL
 from langchain_openai import ChatOpenAI
@@ -22,10 +24,13 @@ GATEWAY_CONFIG = {
     ]
 }
 
-portkey_client = Portkey(
-    api_key=settings.PORTKEY_API_KEY,
-    config=GATEWAY_CONFIG
-)
+@lru_cache(maxsize=1)
+def get_portkey_client() -> Portkey:
+    """Native Portkey client, created on first use (not at import time)."""
+    return Portkey(
+        api_key=settings.PORTKEY_API_KEY,
+        config=GATEWAY_CONFIG
+    )
 
 
 def get_langchain_llm(feature: str = "rag") -> ChatOpenAI:
