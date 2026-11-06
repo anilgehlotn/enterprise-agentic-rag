@@ -55,3 +55,9 @@ tenvv
 
 # Logs
 *.log
+
+# Test / lint artifacts
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/

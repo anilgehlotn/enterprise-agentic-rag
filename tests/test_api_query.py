@@ -39,15 +39,27 @@ def _mock_answer(monkeypatch, calls, result):
 
 def test_query_returns_the_same_response_shape(api, monkeypatch):
     main, calls = api
-    _mock_answer(monkeypatch, calls, {
-        "question": "What is a CronJob?",
-        "answer": "CronJobs create Jobs on a schedule [1].",
-        "thought_process": ["Intent: Technical", "Search Term: cronjob"],
-        "status": "Response generated.",
-        "sources": [{"source": "cronjobs.docx", "source_type": "true", "content": "CronJobs create Jobs.",
-                     "preview": "CronJobs create Jobs.", "retrieval_score": 0.7, "rerank_score": 0.9}],
-        "grounded": True,
-    })
+    _mock_answer(
+        monkeypatch,
+        calls,
+        {
+            "question": "What is a CronJob?",
+            "answer": "CronJobs create Jobs on a schedule [1].",
+            "thought_process": ["Intent: Technical", "Search Term: cronjob"],
+            "status": "Response generated.",
+            "sources": [
+                {
+                    "source": "cronjobs.docx",
+                    "source_type": "true",
+                    "content": "CronJobs create Jobs.",
+                    "preview": "CronJobs create Jobs.",
+                    "retrieval_score": 0.7,
+                    "rerank_score": 0.9,
+                }
+            ],
+            "grounded": True,
+        },
+    )
 
     response = TestClient(main.app).post("/query", json={"q": "What is a CronJob?", "thread_id": "abc"})
 
@@ -59,8 +71,16 @@ def test_query_returns_the_same_response_shape(api, monkeypatch):
         "answer": "CronJobs create Jobs on a schedule [1].",
         "thought_process": ["Intent: Technical", "Search Term: cronjob"],
         "status": "Response generated.",
-        "sources": [{"source": "cronjobs.docx", "source_type": "true", "content": "CronJobs create Jobs.",
-                     "preview": "CronJobs create Jobs.", "retrieval_score": 0.7, "rerank_score": 0.9}],
+        "sources": [
+            {
+                "source": "cronjobs.docx",
+                "source_type": "true",
+                "content": "CronJobs create Jobs.",
+                "preview": "CronJobs create Jobs.",
+                "retrieval_score": 0.7,
+                "rerank_score": 0.9,
+            }
+        ],
         "grounded": True,
     }
     assert calls.answer == [("What is a CronJob?", "abc")]
@@ -68,21 +88,39 @@ def test_query_returns_the_same_response_shape(api, monkeypatch):
 
 def test_query_default_thread_id_is_unchanged(api, monkeypatch):
     main, calls = api
-    _mock_answer(monkeypatch, calls, {"question": "hi", "answer": "Hello!", "thought_process": [],
-                                      "status": "ok", "sources": [], "grounded": None})
+    _mock_answer(
+        monkeypatch,
+        calls,
+        {"question": "hi", "answer": "Hello!", "thought_process": [], "status": "ok", "sources": [], "grounded": None},
+    )
 
     TestClient(main.app).post("/query", json={"q": "hi"})
 
     assert calls.answer == [("hi", "default_user")]
 
 
-@pytest.mark.parametrize("result", [
-    # Guardrails block and pipeline error, exactly as the endpoint used to build them.
-    {"question": "joke", "answer": "I can't help with that.", "status": "Blocked by guardrails.",
-     "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"], "sources": [], "grounded": None},
-    {"question": "x", "answer": rag_service.INTERNAL_ERROR_ANSWER, "status": "error",
-     "thought_process": ["Error encountered during execution."], "sources": [], "grounded": None},
-])
+@pytest.mark.parametrize(
+    "result",
+    [
+        # Guardrails block and pipeline error, exactly as the endpoint used to build them.
+        {
+            "question": "joke",
+            "answer": "I can't help with that.",
+            "status": "Blocked by guardrails.",
+            "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
+            "sources": [],
+            "grounded": None,
+        },
+        {
+            "question": "x",
+            "answer": rag_service.INTERNAL_ERROR_ANSWER,
+            "status": "error",
+            "thought_process": ["Error encountered during execution."],
+            "sources": [],
+            "grounded": None,
+        },
+    ],
+)
 def test_query_blocked_and_error_shapes(api, monkeypatch, result):
     main, calls = api
     _mock_answer(monkeypatch, calls, result)

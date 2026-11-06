@@ -35,6 +35,9 @@ The project uses a `.env` file for local development. All configuration is manag
 | :--- | :--- | :--- |
 | `QDRANT_API_KEY` | Qdrant Cloud access token | `xyz...` |
 | `QDRANT_CLUSTER_ENDPOINT` | Full URL of your Qdrant Cloud cluster | `https://your-cluster.cloud.qdrant.io:6333` |
+| `QDRANT_COLLECTION` | Collection name (default `enterprise_rag`; empty also means default). Use a **new name when the vector schema changes**, e.g. `enterprise_rag_v2` for the hybrid dense + bm25 schema, so an older deployment keeps working on the old collection while you re-ingest into the new one. | `enterprise_rag_v2` |
+| `RETRIEVAL_MODE` | `hybrid` (default): dense + BM25 prefetch fused with Qdrant RRF, then FlashRank. `dense`: dense-only search, then FlashRank. Any other value fails at API startup. Both modes use the same collection. | `hybrid` |
+| `FASTEMBED_CACHE_PATH` | Optional. Where fastembed caches the `Qdrant/bm25` model (default: a temp directory) | `/tmp/fastembed` |
 
 ---
 

@@ -2,11 +2,10 @@ import threading
 
 import logfire
 from langchain_groq import ChatGroq
-from nemoguardrails import RailsConfig, LLMRails
+from nemoguardrails import LLMRails, RailsConfig
 
 from app.config import settings
-from app.guardrails.colang_rules import COLANG_CONTENT, YAML_CONTENT, RAIL_INDICATORS
-
+from app.guardrails.colang_rules import COLANG_CONTENT, RAIL_INDICATORS, YAML_CONTENT
 
 _rails: LLMRails | None = None
 _init_lock = threading.Lock()
@@ -20,21 +19,12 @@ def initialize_rails() -> None:
     """
     global _rails
 
-    guard_llm = ChatGroq(
-        api_key=settings.GROQ_API_KEY,
-        model="llama-3.1-8b-instant",
-        temperature=0
-    )
+    guard_llm = ChatGroq(api_key=settings.GROQ_API_KEY, model="llama-3.1-8b-instant", temperature=0)
 
-    config = RailsConfig.from_content(
-        colang_content=COLANG_CONTENT,
-        yaml_content=YAML_CONTENT
-    )
+    config = RailsConfig.from_content(colang_content=COLANG_CONTENT, yaml_content=YAML_CONTENT)
 
     _rails = LLMRails(config, llm=guard_llm)
     logfire.info("🛡️ NeMo Guardrails initialised (llama-3.1-8b-instant).")
-    
-    
 
 
 def ensure_rails() -> None:

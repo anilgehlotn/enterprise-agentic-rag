@@ -1,4 +1,7 @@
 pytest==8.3.5
+pytest-cov==7.1.0
+# Lint + format (config in pyproject.toml). Pinned so local and CI results match.
+ruff==0.17.4
 # Imported by code under test (app/schemas.py, evals/pipeline.py, app/agents/graph.py,
 # app/mcp_server.py, app/main.py); pinned to match requirements-prod.txt
 pydantic==2.13.4
@@ -11,3 +14,7 @@ python-dotenv==1.2.2
 # (httpx isn't listed, python-multipart is unpinned); pinned to the resolved versions.
 httpx==0.28.1
 python-multipart==0.0.33
+# Retrieval tests build real Qdrant request models (Prefetch, FusionQuery, SparseVector);
+# the client itself is mocked. Pinned to match requirements-prod.txt. fastembed is NOT
+# needed: tests mock the sparse embedder.
+qdrant-client==1.17.1

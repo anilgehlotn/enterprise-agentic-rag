@@ -2,25 +2,28 @@
 # CRITICAL: logfire MUST be configured before ALL other imports
 # so that spans from all modules are captured from the start.
 # ============================================================
-import logfire
 import os
 import tempfile
 from pathlib import Path
+
+import logfire
 from dotenv import load_dotenv
 
 load_dotenv()
-logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
+# "if-token-present": with LOGFIRE_TOKEN set, traces go to Logfire exactly as before.
+# Without it, telemetry is skipped instead of crashing at import ("not logged into
+# Logfire"), so the container can start and serve /health without any secrets.
+logfire.configure(token=os.getenv("LOGFIRE_TOKEN"), send_to_logfire="if-token-present")
 
 # Now safe to import app modules - logfire is already active
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from pydantic import BaseModel, Field
+
 from app.agents.graph import get_rag_agent
 from app.ingestion.processor import process_file
 from app.schemas import MAX_QUESTION_CHARS, QueryResponse
 from app.services import rag_service
-
-from pydantic import BaseModel, Field
-from typing import Optional
-
+from app.services.retrieval.schema import resolve_retrieval_mode
 
 # Initialize FastAPI
 app = FastAPI(title="Enterprise Agentic RAG API")
@@ -28,13 +31,16 @@ app = FastAPI(title="Enterprise Agentic RAG API")
 
 @app.on_event("startup")
 def startup_event():
+    # Fail fast on a mistyped RETRIEVAL_MODE instead of failing on the first query.
+    resolve_retrieval_mode()
     # Warm-up only: rag_service.answer_question() also calls ensure_rails(), which is
     # idempotent, so every entry point (API and MCP server) is guarded either way.
     rag_service.ensure_rails()
 
+
 class QueryRequest(BaseModel):
     q: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS, description="The user's question")
-    thread_id: Optional[str] = "default_user"
+    thread_id: str | None = "default_user"
 
 
 class UploadResult(BaseModel):
@@ -45,8 +51,8 @@ class UploadResult(BaseModel):
 
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".html", ".htm", ".txt", ".docx", ".pptx"}
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-    
-    
+
+
 @app.get("/")
 def home():
     return {"message": "Enterprise LangGraph RAG API is live."}
@@ -98,6 +104,8 @@ async def upload_documents(files: list[UploadFile] = File(...)):
 
         try:
             result = process_file(temporary_path, filename, source_type="uploaded")
+            if result and result.get("error") == "old_collection_schema":
+                raise HTTPException(status_code=409, detail=f"{filename}: {result['detail']}")
             if not result or result.get("error"):
                 raise HTTPException(
                     status_code=502,
@@ -108,8 +116,8 @@ async def upload_documents(files: list[UploadFile] = File(...)):
             Path(temporary_path).unlink(missing_ok=True)
 
     return uploaded
-    
-    
+
+
 @app.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest):
     """

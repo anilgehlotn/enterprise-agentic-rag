@@ -5,10 +5,10 @@ API keys, no Portkey/LangChain packages, and no network. The client is built on
 the first call for each feature and reused afterwards.
 """
 
-from functools import lru_cache
+from functools import cache
 
 
-@lru_cache(maxsize=None)
+@cache
 def get_llm(feature: str):
     """Portkey-backed LangChain chat model, tagged with `feature` for gateway analytics."""
     from app.gateway import get_langchain_llm

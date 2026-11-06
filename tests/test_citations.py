@@ -3,23 +3,22 @@ from app.services.retrieval.citations import build_citations, format_context
 
 
 def test_format_context_includes_source_labels():
-    context = format_context([
-        {"source": "kubernetes.html", "content": "A Job creates one or more Pods."}
-    ])
+    context = format_context([{"source": "kubernetes.html", "content": "A Job creates one or more Pods."}])
 
     assert "[1] Source: kubernetes.html" in context
     assert "A Job creates one or more Pods." in context
 
 
 def test_format_context_numbers_sources_in_order():
-    context = format_context([
-        {"source": "jobs.html", "content": "Jobs run to completion."},
-        {"source": "cron.docx", "content": "CronJobs run on a schedule."},
-    ])
+    context = format_context(
+        [
+            {"source": "jobs.html", "content": "Jobs run to completion."},
+            {"source": "cron.docx", "content": "CronJobs run on a schedule."},
+        ]
+    )
 
     assert context == (
-        "[1] Source: jobs.html\nJobs run to completion.\n\n"
-        "[2] Source: cron.docx\nCronJobs run on a schedule."
+        "[1] Source: jobs.html\nJobs run to completion.\n\n[2] Source: cron.docx\nCronJobs run on a schedule."
     )
 
 
@@ -40,15 +39,17 @@ def test_context_numbers_match_citation_positions_when_chunks_are_empty():
 
 
 def test_build_citations_preserves_retrieval_metadata():
-    citations = build_citations([
-        {
-            "source": "cronjobs.docx",
-            "source_type": "true",
-            "content": "CronJobs create Jobs on a repeating schedule.",
-            "score": 0.81,
-            "rerank_score": 0.92,
-        }
-    ])
+    citations = build_citations(
+        [
+            {
+                "source": "cronjobs.docx",
+                "source_type": "true",
+                "content": "CronJobs create Jobs on a repeating schedule.",
+                "score": 0.81,
+                "rerank_score": 0.92,
+            }
+        ]
+    )
 
     assert citations[0]["source"] == "cronjobs.docx"
     assert citations[0]["rerank_score"] == 0.92

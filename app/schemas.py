@@ -1,7 +1,5 @@
 """API response models that are shared with pure helpers (and unit-testable without the app)."""
 
-from typing import Optional
-
 from pydantic import BaseModel
 
 # Shared input limit for the /query API and the MCP ask_knowledge_base tool.
@@ -15,8 +13,8 @@ class SourceChunk(BaseModel):
     source_type: str = "unknown"
     content: str
     preview: str = ""
-    retrieval_score: Optional[float] = None
-    rerank_score: Optional[float] = None
+    retrieval_score: float | None = None
+    rerank_score: float | None = None
 
 
 class QueryResponse(BaseModel):
@@ -27,4 +25,4 @@ class QueryResponse(BaseModel):
     sources: list[SourceChunk]
     # Self-RAG verifier verdict: True = supported by sources, False = not fully
     # supported, None = not verified (conversational, no documents, blocked, unclear).
-    grounded: Optional[bool] = None
+    grounded: bool | None = None

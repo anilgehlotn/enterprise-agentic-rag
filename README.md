@@ -1,5 +1,7 @@
 # Enterprise Agentic RAG
 
+[![CI](https://github.com/anilgehlotn/enterprise-agentic-rag/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/anilgehlotn/enterprise-agentic-rag/actions/workflows/ci.yml)
+
 An evidence-first AI assistant for technical document intelligence. It ingests mixed enterprise documents, retrieves and reranks the most relevant evidence, applies safety guardrails, and delivers source-attributed answers through a FastAPI service and Streamlit interface.
 
 > **Live demo:** [Open Enterprise Agentic RAG](https://anil-enterprise-rag.streamlit.app/)
@@ -11,7 +13,7 @@ Use the demo to upload a supported document, ask a technical question, and inspe
 Enterprise teams need answers they can verify, not a generic chatbot. This project demonstrates an end-to-end RAG application with:
 
 - document ingestion for PDF, HTML, TXT, DOCX, and PPTX files;
-- semantic search with Gemini embeddings and Qdrant;
+- hybrid search in Qdrant: Gemini dense embeddings + BM25 keyword vectors, fused with Reciprocal Rank Fusion;
 - local cross-encoder reranking with FlashRank;
 - agentic routing for conversational versus knowledge-seeking questions;
 - NeMo guardrails for off-topic, jailbreak, and prompt-injection attempts;
@@ -23,7 +25,7 @@ Enterprise teams need answers they can verify, not a generic chatbot. This proje
 |---|---|
 | API | FastAPI with typed `/query` and `/health` endpoints |
 | Agent orchestration | LangGraph planner, retriever, and responder nodes with thread memory |
-| Retrieval | Gemini embeddings, Qdrant Cloud, and FlashRank reranking |
+| Retrieval | Hybrid dense (Gemini) + sparse (BM25) search with Qdrant RRF fusion, then FlashRank reranking |
 | LLM access | Portkey gateway with Groq primary/fallback routing |
 | Safety | NVIDIA NeMo Guardrails before retrieval and generation |
 | User experience | Streamlit chat interface with retrieved-source visibility |
@@ -40,7 +42,7 @@ flowchart LR
     G -->|blocked| B[Safe response]
     G -->|allowed| P[LangGraph planner]
     P -->|conversation| R[Responder]
-    P -->|technical query| Q[Qdrant vector search]
+    P -->|technical query| Q[Qdrant hybrid search<br/>dense + BM25 → RRF]
     Q --> F[FlashRank reranker]
     F --> R
     R --> A[Answer with evidence]
@@ -114,6 +116,8 @@ Never commit `.env` or API keys.
 python -m app.ingestion.processor DATA --wipe
 ```
 
+Each chunk is stored with a dense Gemini vector and a BM25 sparse vector. Collections created before hybrid search must be re-ingested with `--wipe` (the app tells you so instead of mixing formats). Set `RETRIEVAL_MODE=dense` in `.env` to switch off the keyword half; the default is `hybrid`.
+
 ### 4. Start the API and UI
 
 ```bash
@@ -141,6 +145,29 @@ claude mcp add enterprise-rag --env PYTHONPATH=$PWD -- $PWD/.venv/bin/python -m 
 ```
 
 See the [MCP server guide](DOCS/13_MCP_SERVER.md) for Claude Desktop config, MCP Inspector and security notes.
+
+## Retrieval benchmark
+
+Dense embeddings blur exact technical terms (kubectl flags, YAML fields such as `backoffLimit` or `parallelism`), so retrieval is hybrid: dense top 30 + BM25 top 30, fused with Qdrant's native RRF, then FlashRank picks the top 5. `evals/retrieval_benchmark.py` measures whether that helps on the 15 golden questions, against the live collection:
+
+```bash
+python -m evals.retrieval_benchmark
+```
+
+| Configuration | Hit rate@5 | MRR@5 | Noise rate@5 ↓ | Avg latency (ms) |
+|---|---:|---:|---:|---:|
+| Dense only | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Dense + FlashRank | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Hybrid (RRF) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Hybrid + FlashRank (default) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+
+_Date, collection size and embedding model: see `evals/results/retrieval_benchmark.md`._
+
+- **Hit rate@5**: share of questions with at least one golden relevant chunk in the top 5.
+- **MRR@5**: mean of 1 / rank of the first relevant chunk (0 if none in the top 5).
+- **Noise rate@5**: share of top-5 chunks from the distractor (`noisy`) corpus; lower is better.
+- A chunk counts as relevant if, after normalising case and whitespace, it contains a golden context (or vice versa) or shares ≥ 60% of its word bigrams; see `evals/retrieval_metrics.py`.
+- 15 questions is a small sample: one question moves hit rate by 6.7 points, so treat small differences as noise.
 
 ## Quality checks
 

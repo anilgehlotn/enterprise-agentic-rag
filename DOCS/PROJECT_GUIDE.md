@@ -263,7 +263,7 @@ The project stores:
 - original filename;
 - source type, such as `true`, `noisy`, or `uploaded`.
 
-The collection is named `enterprise_rag`. For first-time user uploads, the backend creates the collection automatically if it does not already exist.
+The collection name comes from `QDRANT_COLLECTION` (default `enterprise_rag`; the hybrid schema uses a new name such as `enterprise_rag_v2`). For first-time user uploads, the backend creates the collection automatically if it does not already exist.
 
 ### Strong interview answer
 

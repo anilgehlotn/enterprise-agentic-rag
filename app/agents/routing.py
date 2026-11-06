@@ -28,6 +28,7 @@ _QUERY_LABEL = re.compile(r"^(?:rewritten\s+|new\s+|improved\s+)?(?:search\s+)?q
 
 # ── Planner ────────────────────────────────────────────────────────────────────
 
+
 def normalize_planner_decision(raw: str | None) -> str:
     """
     Cleans the planner LLM output.
@@ -56,6 +57,7 @@ def route_planner(state: dict) -> str:
 
 # ── JSON extraction shared by the grader and verifier parsers ─────────────────
 
+
 def extract_json_object(raw: str | None) -> dict | None:
     """
     Returns the first JSON object found in an LLM reply, or None.
@@ -75,7 +77,22 @@ def extract_json_object(raw: str | None) -> dict | None:
     return None
 
 
+# ── Retriever ──────────────────────────────────────────────────────────────────
+
+
+def route_after_retriever(state: dict, next_node: str) -> str:
+    """
+    retriever → END when the knowledge base was unreachable (the retriever already
+    wrote the "unavailable" answer); → next_node (grader, or responder in the linear
+    graph) otherwise. An outage must not look like "no results" and trigger a rewrite.
+    """
+    if state.get("retrieval_error"):
+        return END
+    return next_node
+
+
 # ── Grader ─────────────────────────────────────────────────────────────────────
+
 
 def _as_index(value) -> int | None:
     if isinstance(value, bool):  # bool is a subclass of int; True must not mean chunk 1
@@ -111,9 +128,7 @@ def parse_relevance_grades(raw: str | None, num_documents: int) -> list[int] | N
         return []
 
     indices = {
-        index
-        for index in (_as_index(entry) for entry in entries)
-        if index is not None and 0 <= index < num_documents
+        index for index in (_as_index(entry) for entry in entries) if index is not None and 0 <= index < num_documents
     }
     if not indices:
         return None
@@ -135,6 +150,7 @@ def route_after_grader(state: dict) -> str:
 
 # ── Rewriter ───────────────────────────────────────────────────────────────────
 
+
 def _squash(text: str) -> str:
     """Comparison key: case, whitespace, quotes and trailing punctuation don't change a search."""
     return " ".join(text.split()).strip(_WRAPPING_CHARS).rstrip(_TRAILING_PUNCTUATION).casefold()
@@ -151,16 +167,13 @@ def choose_rewritten_query(raw: str | None, failed_query: str | None, original_q
     candidate = lines[0].strip(_WRAPPING_CHARS) if lines else ""
     candidate = _QUERY_LABEL.sub("", candidate).strip(_WRAPPING_CHARS)
 
-    if (
-        not candidate
-        or is_conversational(candidate)
-        or _squash(candidate) == _squash(failed_query or "")
-    ):
+    if not candidate or is_conversational(candidate) or _squash(candidate) == _squash(failed_query or ""):
         return original_question.strip()
     return candidate
 
 
 # ── Responder / verifier ──────────────────────────────────────────────────────
+
 
 def route_after_responder(state: dict) -> str:
     """

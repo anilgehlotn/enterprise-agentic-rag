@@ -102,7 +102,14 @@ def test_corrective_path_rewrites_once_then_answers_and_verifies():
     final = _run(agent)
 
     assert agent.calls == [
-        "planner", "retriever", "grader", "rewriter", "retriever", "grader", "responder", "verifier",
+        "planner",
+        "retriever",
+        "grader",
+        "rewriter",
+        "retriever",
+        "grader",
+        "responder",
+        "verifier",
     ]
     assert agent.queries_searched == ["kubernetes job", "rewrite of kubernetes job"]
     assert final["retrieval_attempts"] == 2
@@ -117,7 +124,13 @@ def test_max_retries_stops_after_two_attempts_without_verifier():
     final = agent.build().invoke(new_request_state("unknowable?"), config={"recursion_limit": 12})
 
     assert agent.calls == [
-        "planner", "retriever", "grader", "rewriter", "retriever", "grader", "responder",
+        "planner",
+        "retriever",
+        "grader",
+        "rewriter",
+        "retriever",
+        "grader",
+        "responder",
     ]
     assert agent.calls.count("retriever") == MAX_RETRIEVAL_ATTEMPTS
     assert final["retrieval_attempts"] == MAX_RETRIEVAL_ATTEMPTS
@@ -165,11 +178,12 @@ def test_new_request_state_resets_attempts_between_requests_on_one_thread():
     agent.calls.clear()
     second = compiled.invoke(new_request_state("second question"), config=config)
 
-    assert agent.calls == first_run                     # rewrite loop ran again
+    assert agent.calls == first_run  # rewrite loop ran again
     assert second["retrieval_attempts"] == MAX_RETRIEVAL_ATTEMPTS
     assert [m["content"] for m in second["messages"] if m["role"] == "user"] == [
-        "first question", "second question",
-    ]                                                   # conversation memory is kept
+        "first question",
+        "second question",
+    ]  # conversation memory is kept
 
 
 def test_stale_grounded_does_not_leak_into_a_conversational_turn():
@@ -188,8 +202,18 @@ def test_stale_grounded_does_not_leak_into_a_conversational_turn():
 # Feature flag + production factory
 @pytest.mark.parametrize(
     "value, expected",
-    [(None, True), ("true", True), ("TRUE", True), ("1", True), ("", True),
-     ("false", False), ("False", False), (" 0 ", False), ("no", False), ("off", False)],
+    [
+        (None, True),
+        ("true", True),
+        ("TRUE", True),
+        ("1", True),
+        ("", True),
+        ("false", False),
+        ("False", False),
+        (" 0 ", False),
+        ("no", False),
+        ("off", False),
+    ],
 )
 def test_self_correction_enabled_parses_env_values(monkeypatch, value, expected):
     monkeypatch.delenv("ENABLE_SELF_CORRECTION", raising=False)
@@ -205,9 +229,9 @@ def test_get_rag_agent_builds_production_graph_without_keys(monkeypatch, flag, h
     get_rag_agent.cache_clear()
     try:
         agent = get_rag_agent()
-        assert get_rag_agent() is agent                 # cached
+        assert get_rag_agent() is agent  # cached
         assert ("grader" in agent.get_graph().nodes) is has_grader
-        assert agent.checkpointer is not None           # MemorySaver attached
+        assert agent.checkpointer is not None  # MemorySaver attached
     finally:
         get_rag_agent.cache_clear()
 

@@ -12,8 +12,8 @@ import pytest
 from app.agents import graph as graph_module
 from app.services import rag_service
 
-
 # ── list_documents ────────────────────────────────────────────────────────────
+
 
 def _write(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -21,18 +21,23 @@ def _write(path, payload):
 
 
 def test_list_documents_reads_processed_data_folder(tmp_path):
-    _write(tmp_path / "true" / "cronjobs.docx.json",
-           {"filename": "cronjobs.docx", "source_type": "true", "chunks": ["a", "b", "c"]})
-    _write(tmp_path / "uploaded" / "Notes.pdf.json",
-           {"filename": "Notes.pdf", "source_type": "uploaded", "chunks": ["x"]})
-    _write(tmp_path / "true" / "architecture.pptx.json",
-           {"filename": "architecture.pptx", "source_type": "true", "chunks": []})
-    _write(tmp_path / "noisy" / "legacy.txt.json", {"chunks": ["1", "2"]})            # no filename/source_type
-    _write(tmp_path / "noisy" / "broken.json", "{not json")                            # skipped
-    _write(tmp_path / "noisy" / "list.json", ["not", "a", "dict"])                     # skipped
+    _write(
+        tmp_path / "true" / "cronjobs.docx.json",
+        {"filename": "cronjobs.docx", "source_type": "true", "chunks": ["a", "b", "c"]},
+    )
+    _write(
+        tmp_path / "uploaded" / "Notes.pdf.json", {"filename": "Notes.pdf", "source_type": "uploaded", "chunks": ["x"]}
+    )
+    _write(
+        tmp_path / "true" / "architecture.pptx.json",
+        {"filename": "architecture.pptx", "source_type": "true", "chunks": []},
+    )
+    _write(tmp_path / "noisy" / "legacy.txt.json", {"chunks": ["1", "2"]})  # no filename/source_type
+    _write(tmp_path / "noisy" / "broken.json", "{not json")  # skipped
+    _write(tmp_path / "noisy" / "list.json", ["not", "a", "dict"])  # skipped
     _write(tmp_path / "noisy" / "weird.json", {"filename": "weird.txt", "chunks": "nope"})
-    _write(tmp_path / "top-level.json", {"filename": "ignored"})                        # not in a source folder
-    _write(tmp_path / "true" / "readme.md", "not json")                                 # not *.json
+    _write(tmp_path / "top-level.json", {"filename": "ignored"})  # not in a source folder
+    _write(tmp_path / "true" / "readme.md", "not json")  # not *.json
 
     documents = rag_service.list_documents(tmp_path)
 
@@ -65,6 +70,7 @@ def test_default_folder_is_resolved_from_project_root_not_cwd(tmp_path, monkeypa
 
 
 # ── answer_question ───────────────────────────────────────────────────────────
+
 
 class FakeAgent:
     def __init__(self, output=None, error=None):
@@ -99,27 +105,42 @@ def _use_agent(monkeypatch, agent):
 
 
 def test_answer_question_runs_guardrails_then_agent(monkeypatch, guardrails):
-    agent = _use_agent(monkeypatch, FakeAgent(output={
-        "final_answer": "Jobs run Pods to completion [1].",
-        "plan": ["Intent: Technical", "Verification: answer supported by sources ✅"],
-        "status": "Response generated.",
-        "documents": [{"source": "jobs.html", "source_type": "true", "content": "A Job runs Pods.", "score": 0.8}],
-        "grounded": True,
-    }))
+    agent = _use_agent(
+        monkeypatch,
+        FakeAgent(
+            output={
+                "final_answer": "Jobs run Pods to completion [1].",
+                "plan": ["Intent: Technical", "Verification: answer supported by sources ✅"],
+                "status": "Response generated.",
+                "documents": [
+                    {"source": "jobs.html", "source_type": "true", "content": "A Job runs Pods.", "score": 0.8}
+                ],
+                "grounded": True,
+            }
+        ),
+    )
 
     result = rag_service.answer_question("What is a Job?", "thread-9")
 
     assert guardrails.init_calls == 1
     state, config = agent.calls[0]
     assert config == {"configurable": {"thread_id": "thread-9"}}
-    assert state["retrieval_attempts"] == 0 and state["grounded"] is None    # per-request reset
+    assert state["retrieval_attempts"] == 0 and state["grounded"] is None  # per-request reset
     assert result == {
         "question": "What is a Job?",
         "answer": "Jobs run Pods to completion [1].",
         "thought_process": ["Intent: Technical", "Verification: answer supported by sources ✅"],
         "status": "Response generated.",
-        "sources": [{"source": "jobs.html", "source_type": "true", "content": "A Job runs Pods.",
-                     "preview": "A Job runs Pods.", "retrieval_score": 0.8, "rerank_score": None}],
+        "sources": [
+            {
+                "source": "jobs.html",
+                "source_type": "true",
+                "content": "A Job runs Pods.",
+                "preview": "A Job runs Pods.",
+                "retrieval_score": 0.8,
+                "rerank_score": None,
+            }
+        ],
         "grounded": True,
     }
 
@@ -169,10 +190,12 @@ def test_guardrails_init_failure_fails_closed(monkeypatch, guardrails):
 
 # ── search_knowledge ──────────────────────────────────────────────────────────
 
+
 def test_search_knowledge_searches_reranks_and_formats_without_llm(monkeypatch):
     calls = {}
-    candidates = [{"source": f"d{i}.txt", "source_type": "true", "content": f"chunk {i}", "score": 0.5}
-                  for i in range(30)]
+    candidates = [
+        {"source": f"d{i}.txt", "source_type": "true", "content": f"chunk {i}", "score": 0.5} for i in range(30)
+    ]
 
     def search(query, limit):
         calls["search"] = (query, limit)
@@ -182,28 +205,40 @@ def test_search_knowledge_searches_reranks_and_formats_without_llm(monkeypatch):
         calls["rerank"] = (query, len(records), top_n)
         return [dict(r, rerank_score=0.9) for r in records[:top_n]]
 
-    monkeypatch.setitem(sys.modules, "app.services.retrieval.qdrant_service",
-                        SimpleNamespace(search_enterprise_knowledge=search))
-    monkeypatch.setitem(sys.modules, "app.services.retrieval.ranking_service",
-                        SimpleNamespace(rerank_records=rerank))
-    monkeypatch.setitem(sys.modules, "app.gateway", None)     # any LLM import would raise
+    monkeypatch.setitem(
+        sys.modules, "app.services.retrieval.qdrant_service", SimpleNamespace(search_enterprise_knowledge=search)
+    )
+    monkeypatch.setitem(sys.modules, "app.services.retrieval.ranking_service", SimpleNamespace(rerank_records=rerank))
+    monkeypatch.setitem(sys.modules, "app.gateway", None)  # any LLM import would raise
 
     results = rag_service.search_knowledge("cron schedule", top_k=8)
 
-    assert calls["search"] == ("cron schedule", 24)            # over-fetch 3x (min 15) for the reranker
+    assert calls["search"] == ("cron schedule", 24)  # over-fetch 3x (min 15) for the reranker
     assert calls["rerank"] == ("cron schedule", 24, 8)
     assert len(results) == 8
-    assert results[0] == {"source": "d0.txt", "source_type": "true", "content": "chunk 0",
-                          "preview": "chunk 0", "retrieval_score": 0.5, "rerank_score": 0.9}
+    assert results[0] == {
+        "source": "d0.txt",
+        "source_type": "true",
+        "content": "chunk 0",
+        "preview": "chunk 0",
+        "retrieval_score": 0.5,
+        "rerank_score": 0.9,
+    }
 
 
 @pytest.mark.parametrize("top_k, limit", [(1, 15), (5, 15), (20, 60)])
 def test_search_knowledge_candidate_pool(monkeypatch, top_k, limit):
     seen = {}
-    monkeypatch.setitem(sys.modules, "app.services.retrieval.qdrant_service",
-                        SimpleNamespace(search_enterprise_knowledge=lambda q, limit: seen.update(limit=limit) or []))
-    monkeypatch.setitem(sys.modules, "app.services.retrieval.ranking_service",
-                        SimpleNamespace(rerank_records=lambda q, records, top_n: records))
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.retrieval.qdrant_service",
+        SimpleNamespace(search_enterprise_knowledge=lambda q, limit: seen.update(limit=limit) or []),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.retrieval.ranking_service",
+        SimpleNamespace(rerank_records=lambda q, records, top_n: records),
+    )
 
     assert rag_service.search_knowledge("q", top_k) == []
     assert seen["limit"] == limit
@@ -211,17 +246,21 @@ def test_search_knowledge_candidate_pool(monkeypatch, top_k, limit):
 
 # ── guardrails ensure_rails (real module, heavy deps stubbed) ─────────────────
 
+
 def test_ensure_rails_initialises_once_even_with_concurrent_callers(monkeypatch):
     built = []
 
     class SlowLLMRails:
         def __init__(self, config, llm):
-            time.sleep(0.05)               # widen the race window
+            time.sleep(0.05)  # widen the race window
             built.append(self)
 
     monkeypatch.setitem(sys.modules, "langchain_groq", SimpleNamespace(ChatGroq=lambda **kwargs: object()))
-    monkeypatch.setitem(sys.modules, "nemoguardrails", SimpleNamespace(
-        RailsConfig=SimpleNamespace(from_content=lambda **kwargs: object()), LLMRails=SlowLLMRails))
+    monkeypatch.setitem(
+        sys.modules,
+        "nemoguardrails",
+        SimpleNamespace(RailsConfig=SimpleNamespace(from_content=lambda **kwargs: object()), LLMRails=SlowLLMRails),
+    )
     monkeypatch.setitem(sys.modules, "app.config", SimpleNamespace(settings=SimpleNamespace(GROQ_API_KEY="")))
     monkeypatch.delitem(sys.modules, "app.guardrails.rails", raising=False)
     monkeypatch.delitem(sys.modules, "app.guardrails", raising=False)

@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**", "fix/**"]
+  pull_request:
+    branches: [main]
+
+# A new push to the same branch / PR cancels the run that is still in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  # Total line coverage of app/ was 79% when this gate was added; the floor is that
+  # value rounded down to the nearest 5%. Raise it as coverage grows, never lower it.
+  COVERAGE_FLOOR: "75"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install ruff (version pinned in requirements-dev.txt)
+        run: pip install "$(grep -E '^ruff==' requirements-dev.txt)"
+
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+      - name: ruff format --check
+        run: ruff format --check --diff .
+
+  test:
+    name: Tests (pytest + coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: >-
+          python -m pytest tests -q
+          --cov=app
+          --cov-report=term
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=${{ env.COVERAGE_FLOOR }}
+
+      - name: Upload coverage.xml
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  docker:
+    name: Docker build + /health smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build production image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: enterprise-agentic-rag:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image size
+        run: docker image ls enterprise-agentic-rag:ci --format '{{.Repository}}:{{.Tag}}  {{.Size}}'
+
+      - name: Run container with dummy configuration
+        # Dummy values only: /health must work without real API keys.
+        run: |
+          docker run -d --name rag-api -p 8080:8080 \
+            -e PORT=8080 \
+            -e GROQ_API_KEY=dummy \
+            -e GROQ_FALLBACK_API_KEY=dummy \
+            -e PORTKEY_API_KEY=dummy \
+            -e GEMINI_API_KEY=dummy \
+            -e QDRANT_API_KEY=dummy \
+            -e QDRANT_CLUSTER_ENDPOINT=http://127.0.0.1:6333 \
+            -e QDRANT_COLLECTION=enterprise_rag_v2 \
+            -e RETRIEVAL_MODE=hybrid \
+            -e LANGSMITH_TRACING=false \
+            enterprise-agentic-rag:ci
+
+      - name: Wait for GET /health == ok
+        run: |
+          for i in $(seq 1 45); do
+            body=$(curl -fsS http://127.0.0.1:8080/health || true)
+            if [ -n "$body" ] && echo "$body" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") == "ok" else 1)'; then
+              echo "Healthy after ~$((i * 2))s: $body"
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' rag-api)" != "true" ]; then
+              echo "Container exited before becoming healthy."
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Timed out waiting for /health."
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs rag-api || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f rag-api || true
