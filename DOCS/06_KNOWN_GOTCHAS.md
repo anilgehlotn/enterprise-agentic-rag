@@ -19,18 +19,22 @@ If we were to import `settings` from `app.config` at the top of `app/main.py` to
 We bypass the `config.py` file entirely at the very top of `app/main.py`. We load the environment variables directly using `os.getenv()` and configure Logfire **before any other application imports occur**.
 
 ```python
-# app/main.py
-import logfire
+# app/main.py (simplified)
 import os
+
+import logfire
 from dotenv import load_dotenv
 
 load_dotenv()
-logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
+# "if-token-present": without LOGFIRE_TOKEN telemetry stays local instead of crashing at import.
+logfire.configure(token=os.getenv("LOGFIRE_TOKEN"), send_to_logfire="if-token-present")
 
-# Safe to import the rest of the application now!
-from app.config import settings 
-from app.agents.graph import rag_agent
+# Now safe to import app modules - logfire is already active
+from app.agents.graph import get_rag_agent
+from app.services import rag_service
 ```
+
+`ruff` is configured to allow these late imports in `app/main.py` only (`E402` in `pyproject.toml`).
 This guarantees that Logfire is fully awake and tracing before the rest of the application is loaded into memory.
 
 ---
@@ -46,16 +50,19 @@ Loading heavy machine learning models (like FlashRank) or initializing large SDK
 We implemented a **Lazy Loading** pattern across the entire application. We do not initialize the Gemini embedding client or the FlashRank ranker at the module level. Instead, we wrap them in "getter" functions that only trigger the first time they are actually needed.
 
 ```python
-# app/services/retrieval/embedding.py
-def get_embedding_model():
-    global model
-    if model is None:
-        # Initialized ONLY on first use!
-        model = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-2-preview",
-            google_api_key=settings.GEMINI_API_KEY
-        )
-    return model
+# app/services/retrieval/embedding.py (simplified)
+_active_model = None
+
+def _init():
+    """Initialise the embedding model once per process, on first use."""
+    global _active_model
+    if _active_model is not None:
+        return
+    # Imported here so importing this module needs no Google SDK (CI, tests).
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings
+    _active_model = GoogleGenerativeAIEmbeddings(model=GEMINI_MODEL, google_api_key=settings.GEMINI_API_KEY)
 ```
 
-This ensures your FastAPI server starts in **milliseconds**, and Logfire is guaranteed to be active before any AI service is touched.
+The same pattern is used everywhere a client is expensive or needs a key: `get_qdrant_client()`, `get_portkey_client()` and `get_llm()` are cached factories, FlashRank uses `_get_ranker()`, and the agent graph itself is built by `get_rag_agent()` on first use (there is no module-level `rag_agent`). Importing any `app.agents` module creates no client. A test enforces this in a fresh interpreter (`test_importing_agent_modules_creates_no_clients`), which is also why the test suite needs no API keys.
+
+The one deliberate startup cost is the NeMo Guardrails warm-up in the FastAPI lifespan handler. Models that would otherwise be downloaded at startup (FlashRank, BM25, NeMo's MiniLM) are baked into the Docker image.

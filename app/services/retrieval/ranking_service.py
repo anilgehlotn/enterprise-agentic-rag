@@ -21,7 +21,7 @@ def flashrank_cache_dir() -> str:
 def _get_ranker() -> Ranker:
     """
     Initializes the FlashRank engine lazily.
-    FlashRank uses a local ONNX model (ms-marco-MiniLM-L-6-v2) for ultra-fast reranking.
+    FlashRank uses a local ONNX cross-encoder (its default, ms-marco-TinyBERT-L-2-v2) for reranking.
     """
     global _ranker
     if _ranker is None:

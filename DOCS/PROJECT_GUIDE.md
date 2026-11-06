@@ -19,7 +19,7 @@ The important idea is that the assistant should not answer only from its general
 
 ### One-sentence interview answer
 
-> “Enterprise Agentic RAG is a FastAPI and Streamlit application that ingests technical documents, indexes them in Qdrant using Gemini embeddings, retrieves and reranks evidence for a question, applies safety guardrails, and returns an answer with source traceability.”
+> “Enterprise Agentic RAG is a FastAPI service with a Streamlit UI and an MCP server. It indexes technical documents in Qdrant with both Gemini embeddings and BM25 keywords, and a LangGraph agent retrieves, reranks and grades the evidence, retries once with a rewritten query if nothing is relevant, answers with inline citations, and then checks the answer against the sources. Guardrails run before everything, answers stream token by token, and conversations are remembered per thread.”
 
 ### The problem it solves
 
@@ -41,14 +41,19 @@ This is useful for internal IT knowledge bases, policy assistants, product-suppo
 | **LLM** | A Large Language Model such as a Groq-hosted model. It writes natural-language answers. | It turns retrieved evidence into a readable answer. |
 | **RAG** | Retrieval-Augmented Generation. Search documents first, then generate an answer. | Reduces unsupported answers and lets the system use private data. |
 | **Embedding** | A long list of numbers representing the meaning of text. | Lets the system search by meaning, not only exact words. |
+| **BM25** | A classic keyword-scoring formula: rare words that appear in a chunk count more. | Finds exact technical terms such as `backoffLimit` that embeddings blur. |
+| **Hybrid search / RRF** | Running meaning search and keyword search together, then merging the two rankings with Reciprocal Rank Fusion. | Gets the strengths of both searches without comparing their incompatible scores. |
 | **Vector database** | A database optimized for searching embeddings. | Qdrant stores document chunks and finds similar chunks quickly. |
 | **Chunk** | A small piece of a larger document. | The system searches manageable passages instead of an entire PDF. |
 | **Reranking** | A second, more precise ordering of search results. | FlashRank moves the strongest evidence to the top. |
 | **API** | A structured way for software systems to communicate. | Streamlit calls the FastAPI backend; the backend calls AI services. |
-| **FastAPI** | A Python framework for building web APIs. | It exposes `/query`, `/documents`, and `/health`. |
+| **FastAPI** | A Python framework for building web APIs. | It exposes `/query`, `/query/stream`, `/documents`, `/threads/{id}/reset` and `/health`. |
 | **Streamlit** | A Python framework for building data/AI web interfaces quickly. | It provides the visible chat and upload experience. |
 | **LangChain** | A library that helps connect LLMs, prompts, retrievers, and tools. | It supplies integrations used by the system. |
-| **LangGraph** | A library for modeling LLM workflows as a graph of steps and decisions. | It controls Planner -> Retriever -> Responder flow and conversation memory. |
+| **LangGraph** | A library for modeling LLM workflows as a graph of steps and decisions. | It controls the planner → retriever → grader → (rewriter) → responder → verifier flow and conversation memory. |
+| **Checkpointer** | LangGraph's storage for the graph state, saved after every step and keyed by `thread_id`. | Gives conversation memory that survives restarts (SQLite locally, Postgres on Cloud Run). |
+| **SSE** | Server-Sent Events: a normal HTTP response the server keeps writing small events to. | Streams plan steps and answer tokens to the UI as they happen. |
+| **MCP** | Model Context Protocol: a standard way for AI assistants to call external tools. | Lets Claude Desktop or Claude Code query this knowledge base. |
 | **Guardrails** | Rules and checks around an LLM. | They block jailbreaks and off-topic requests before retrieval. |
 | **Observability** | Traces, logs, and metrics that show what the system did. | Logfire and LangSmith make failures and decisions visible. |
 
@@ -125,9 +130,10 @@ One product can use several specialized services. Each service does a different 
 |---|---|---|
 | `GEMINI_API_KEY` | Google Gemini embedding model | Converts document chunks and questions into vectors for semantic search. |
 | `QDRANT_API_KEY` and `QDRANT_CLUSTER_ENDPOINT` | Qdrant Cloud | Stores vectors and performs fast similarity search. |
-| `GROQ_API_KEY` | Groq model access | Runs the guardrail classifier and enables fast LLM inference. |
-| `GROQ_FALLBACK_API_KEY` | Secondary Groq credential | Supports a fallback path when the primary route is unavailable. |
-| `PORTKEY_API_KEY` | Portkey LLM gateway | Centralizes routing, retry/fallback behavior, cache signals, and request metadata. |
+| `GROQ_API_KEY` | Groq model access | Runs the NeMo guardrail classifier directly (`llama-3.1-8b-instant`). |
+| `GROQ_FALLBACK_API_KEY` | Secondary Groq credential | Not used by the code. The agent's two Groq keys are stored inside Portkey (integrations `rag` and `brag`), which handles the fallback. |
+| `PORTKEY_API_KEY` | Portkey LLM gateway | Every agent LLM call goes through it: routing to Groq, retries, fallback model, cache, request metadata. |
+| `DATABASE_URL` | Postgres (optional) | Shared conversation memory on Cloud Run (`CHECKPOINTER=postgres`). |
 | `LOGFIRE_TOKEN` | Pydantic Logfire | Records logs and spans for debugging and observability. |
 | `LANGSMITH_API_KEY` | LangSmith | Captures LangChain/LangGraph traces and helps inspect agent behavior. |
 | `JUDGE_GROQ` | Evaluation-only model key | Scores RAG evaluation metrics without using the live app's key. |
@@ -144,7 +150,7 @@ Because the tasks are different:
 
 ### Correct security answer in an interview
 
-> “The browser never receives the provider keys. The Streamlit UI talks to the backend, and the backend holds secrets as environment variables in Render. Keys are excluded from Git with `.env` in `.gitignore`.”
+> “The browser never receives the provider keys. The Streamlit UI talks to the backend, and on Cloud Run the backend reads its keys from Google Secret Manager; the deploy pipeline authenticates with Workload Identity Federation, so no long-lived cloud key exists anywhere. Locally, keys live in `.env`, which is in `.gitignore` and `.dockerignore`.”
 
 ---
 
@@ -158,27 +164,33 @@ flowchart TD
     D -->|blocked| E[Safe refusal]
     D -->|allowed| F[LangGraph planner]
     F -->|conversation| H[Responder]
-    F -->|technical question| G[Qdrant retrieval]
+    F -->|technical question| G[Qdrant hybrid retrieval<br/>dense + BM25, RRF]
     G --> I[FlashRank reranking]
-    I --> H
+    I --> GR[Grader]
+    GR -->|nothing relevant, once| RW[Rewriter]
+    RW --> G
+    GR --> H
+    H --> V[Verifier]
     H --> J[Portkey + Groq]
-    J --> K[Answer with source evidence]
+    V --> K[Answer + citations + grounded badge]
     K --> B
+    MC[MCP client] --> C
 
     L[Uploaded documents] --> M[Parser + chunker]
-    M --> N[Gemini embeddings]
+    M --> N[Gemini + BM25 vectors]
     N --> G
 ```
 
 ### Read the architecture from left to right
 
 1. The user asks a question in Streamlit.
-2. Streamlit calls FastAPI's `/query` endpoint.
+2. Streamlit calls FastAPI's `/query/stream` endpoint (or `/query` as a fallback). MCP clients reach the same logic through the MCP server.
 3. Guardrails inspect the question before document search or answer generation.
 4. The planner decides whether the question needs documents.
-5. Technical questions retrieve evidence from Qdrant and rerank it.
-6. The responder creates an answer using the question, retrieved context, and conversation history.
-7. The UI shows the answer and the supporting source chunks.
+5. Technical questions retrieve evidence from Qdrant (meaning + keyword search), rerank it, and grade it for relevance. If nothing is relevant, the query is rewritten and the search runs once more.
+6. The responder writes an answer with `[n]` citations, using the evidence and conversation history. If no relevant evidence was found, it says so instead.
+7. The verifier checks the answer against the evidence.
+8. The UI shows live steps, the streamed answer, the sources and the grounded badge.
 
 ---
 
@@ -186,26 +198,34 @@ flowchart TD
 
 | Location | Responsibility | Interview explanation |
 |---|---|---|
-| `app/main.py` | FastAPI entrypoint and endpoints | “This is the backend boundary. It validates requests and returns structured responses.” |
+| `app/main.py` | FastAPI entrypoint, endpoints and lifespan | “This is the backend boundary. It validates requests, applies rate limits, streams SSE and opens/closes the checkpointer.” |
+| `app/services/rag_service.py` | Shared guardrails → agent logic | “The API and the MCP server both call this, so they can't drift apart.” |
+| `app/rate_limit.py` | Per-IP rate limiting | “Protects the LLM budget from a single client.” |
+| `app/mcp_server.py` | MCP server | “Exposes ask, search and list tools to AI assistants.” |
 | `app/config.py` | Environment-variable configuration | “This keeps secrets and deployment configuration outside source code.” |
 | `app/agents/graph.py` | LangGraph workflow | “This defines which agent node runs next.” |
-| `app/agents/state.py` | Shared workflow state | “It describes data passed between planner, retriever, and responder.” |
+| `app/agents/state.py` | Shared workflow state | “It describes the data passed between the nodes and resets per-request fields.” |
+| `app/agents/routing.py` | Pure routing rules and LLM-output parsers | “Every branch decision is a plain function, unit-tested without an LLM.” |
+| `app/agents/checkpointer.py` | Conversation-memory backend | “Chooses memory, SQLite or Postgres from one setting.” |
 | `app/agents/nodes/planner.py` | Intent classification and query refinement | “It decides conversational versus retrieval-based handling.” |
 | `app/agents/nodes/retriever.py` | Search and reranking | “It turns a query into evidence records.” |
-| `app/agents/nodes/responder.py` | Final answer generation | “It constructs a grounded prompt from context and history.” |
+| `app/agents/nodes/grader.py`, `rewriter.py`, `verifier.py` | Corrective RAG and Self-RAG | “They drop irrelevant chunks, retry with a better query, and check the answer.” |
+| `app/agents/nodes/responder.py` | Final answer generation | “It constructs a citation-numbered prompt from context and history, and streams tokens on `/query/stream`.” |
 | `app/ingestion/loaders/` | PDF, HTML, TXT, DOCX, PPTX parsing | “Each format has a suitable local parser.” |
 | `app/ingestion/chunking/splitter.py` | Splits text into chunks | “It keeps chunks within a bounded context size.” |
 | `app/ingestion/processor.py` | Parse -> chunk -> embed -> index | “This is the ingestion pipeline.” |
 | `app/services/retrieval/embedding.py` | Gemini embedding client | “Creates semantic vectors for text.” |
-| `app/services/retrieval/qdrant_service.py` | Qdrant query service | “Finds semantically similar chunks.” |
+| `app/services/retrieval/qdrant_service.py` | Qdrant schema and search | “Runs hybrid (dense + BM25, RRF) or dense search.” |
+| `app/services/retrieval/sparse_embedding.py` | BM25 sparse vectors | “Keyword weights for exact technical terms.” |
 | `app/services/retrieval/ranking_service.py` | FlashRank reranker | “Improves the ordering of initial search results.” |
 | `app/services/retrieval/citations.py` | Context formatting and citation records | “Preserves source provenance into the final UI/API response.” |
 | `app/guardrails/` | NeMo Guardrails rules | “Rejects unsafe or unrelated requests early.” |
 | `app/gateway/client.py` | Portkey and model routing | “Encapsulates retries, fallback, metadata, and model access.” |
 | `ui/app.py` | Streamlit application | “The browser-facing experience, upload flow, chat, and source display.” |
 | `evals/` | Golden data, pipeline, and RAGAS metrics | “Measures quality instead of relying on subjective demos.” |
-| `tests/` | Fast unit tests | “Tests pure behaviors such as citation formatting and chunk size.” |
+| `tests/` | Unit and API tests | “About 360 tests: routing, graph shape with fake nodes, SSE events, memory, rate limits. No keys or network needed.” |
 | `Dockerfile` | Backend container definition | “Makes backend runtime repeatable in deployment.” |
+| `.github/workflows/` | CI and Cloud Run deploy | “Every push runs lint, tests with a coverage gate, and a Docker smoke test.” |
 
 ---
 
@@ -227,11 +247,11 @@ Different formats need different parsers:
 
 | Format | Parser approach |
 |---|---|
-| PDF | `pypdf` / local PDF extraction |
+| PDF | `pypdf`, with `pdfplumber` for pages pypdf returns blank (no OCR) |
 | HTML | BeautifulSoup parsing |
 | TXT | Direct text reading |
-| DOCX | `python-docx` or local loader |
-| PPTX | `python-pptx` or local loader |
+| DOCX | `python-docx` (paragraphs and tables) |
+| PPTX | `python-pptx` |
 
 The result is plain text.
 
@@ -243,7 +263,10 @@ The current chunker has a maximum-size boundary. This is important: a very long 
 
 ### Step 4: create embeddings
 
-Each chunk becomes an embedding vector through Gemini. Similar meanings produce vectors that are close together in mathematical space.
+Each chunk gets **two** vectors:
+
+- a **dense** vector from Gemini (`gemini-embedding-2-preview`, 3072 numbers), where similar meanings produce vectors that are close together;
+- a **sparse BM25** vector from fastembed, which records which words appear and how important they are. It runs locally on the CPU.
 
 Example idea:
 
@@ -258,16 +281,16 @@ These sentences use different words but have related meaning, so vector search c
 
 The project stores:
 
-- the embedding vector;
+- the `dense` and `bm25` vectors (one Qdrant point per chunk);
 - chunk text;
 - original filename;
 - source type, such as `true`, `noisy`, or `uploaded`.
 
-The collection name comes from `QDRANT_COLLECTION` (default `enterprise_rag`; the hybrid schema uses a new name such as `enterprise_rag_v2`). For first-time user uploads, the backend creates the collection automatically if it does not already exist.
+The collection name comes from `QDRANT_COLLECTION` (code default `enterprise_rag`; Cloud Run is deployed with `enterprise_rag_v2`, the name used for the hybrid schema). If the collection doesn't exist, ingestion or the first upload creates it. If it exists with the old single-vector schema, the app refuses to mix formats and asks you to re-ingest with `--wipe`.
 
 ### Strong interview answer
 
-> “The ingestion pipeline is modular. A loader extracts text, the chunker makes bounded passages, Gemini generates embeddings, and Qdrant stores vectors with filename and source metadata. Keeping metadata is important because it lets the UI show the evidence behind an answer.”
+> “The ingestion pipeline is modular. A loader extracts text, the chunker makes bounded passages, and each chunk is stored in Qdrant with a Gemini meaning vector, a BM25 keyword vector, and its filename and source type. Keeping metadata is important because it lets the UI show the evidence behind an answer.”
 
 ---
 
@@ -275,13 +298,16 @@ The collection name comes from `QDRANT_COLLECTION` (default `enterprise_rag`; th
 
 When the user asks a technical question, the system does not scan every document one by one.
 
-### Vector search in Qdrant
+### Hybrid search in Qdrant
 
-1. Convert the user question into an embedding.
-2. Ask Qdrant for the most similar stored chunk vectors.
-3. Receive candidate chunks with a similarity score, filename, and content.
+1. Convert the question into a Gemini vector **and** a BM25 keyword vector.
+2. Qdrant finds the 30 closest chunks by meaning and the 30 best chunks by keywords.
+3. Qdrant merges the two lists with **Reciprocal Rank Fusion** (RRF): a chunk ranked high in both lists rises to the top. RRF only looks at positions in each list, so the two incompatible score scales never need to be compared.
+4. The top 15 candidates come back with their content, filename and fusion score.
 
-The project initially retrieves more candidates than it ultimately uses. This is a common pattern: vector search is fast, but not perfect.
+Why both? Meaning search understands "retry limit" ≈ `backoffLimit`, but blurs exact terms. Keyword search finds `backoffLimit` exactly, but doesn't understand synonyms. `RETRIEVAL_MODE=dense` switches the keyword half off.
+
+The project retrieves more candidates than it ultimately uses. This is a common pattern: first-stage search is fast, but not precise.
 
 ### Why reranking is needed
 
@@ -290,8 +316,12 @@ The vector database is good at broad semantic matching. However, the top result 
 FlashRank is a **cross-encoder reranker**. It reads the question and candidate passage together and assigns a more precise relevance score.
 
 ```text
-Question -> Qdrant retrieves 15 candidate chunks -> FlashRank keeps best 5 -> LLM answers
+Question -> Qdrant hybrid search: 15 candidates -> FlashRank keeps best 5 -> grader keeps the relevant ones -> LLM answers
 ```
+
+### Grading, retrying and admitting "I don't know"
+
+Reranking always returns *some* top 5, even when none of them answers the question. So a **grader** (one LLM call for all 5 chunks) keeps only the relevant ones. If none are relevant, a **rewriter** writes a different search query and the search runs once more. If that also finds nothing, the answer is a fixed "I couldn't find this in the indexed documents" message, deliberately not written by the LLM so it can't fall back to general knowledge.
 
 ### Why retain citations
 
@@ -299,14 +329,14 @@ Earlier RAG implementations often turn results into anonymous strings and lose s
 
 - `source` - original filename;
 - `source_type` - trusted/uploaded/noisy category;
-- `score` - retrieval similarity;
-- `rerank_score` - second-stage relevance.
+- `retrieval_score` - first-stage score (RRF fusion score in hybrid mode, cosine similarity in dense mode);
+- `rerank_score` - FlashRank relevance.
 
-That makes the answer inspectable and is an important enterprise design choice.
+The answer cites sources inline as `[1]`, `[2]`, and the numbers match the order of the `sources` list. That makes the answer inspectable.
 
 ### Important limitation to say honestly
 
-Source attribution improves transparency, but it does not automatically prove every sentence is correct. A production system should additionally validate grounding, evaluate results, and potentially require human review for high-risk decisions.
+Source attribution improves transparency, but it does not prove every sentence is correct. The verifier node is a second LLM's opinion, not a proof: it can be wrong in both directions. High-risk decisions still need evaluation and human review.
 
 ---
 
@@ -320,13 +350,19 @@ LangChain is an integration library. It provides common interfaces for models, e
 
 LangGraph is used when an LLM application has multiple steps and decisions. Instead of writing one giant prompt, we define nodes and transitions.
 
-Current graph:
+Current graph (node names from `app/agents/graph.py`):
 
 ```text
-Planner
-  -> Conversational? -> Responder -> End
-  -> Technical?      -> Retriever -> Responder -> End
+planner
+  -> CONVERSATIONAL? -> responder -> End
+  -> technical?      -> retriever -> grader
+                          grader: relevant chunks          -> responder -> verifier -> End
+                          grader: none, first attempt      -> rewriter  -> retriever (again)
+                          grader: none, second attempt     -> responder ("not in the documents") -> End
+                        retriever: knowledge base down     -> End ("knowledge base unavailable")
 ```
+
+`ENABLE_SELF_CORRECTION=false` switches back to the original `planner -> retriever -> responder` graph.
 
 ### Why a graph instead of a simple function chain?
 
@@ -334,7 +370,7 @@ A simple chain always runs the same sequence. This project needs branching:
 
 - a greeting does not need Qdrant search;
 - a technical question does;
-- future versions can add more nodes, such as clarification, tool use, or human approval.
+- a search that found nothing relevant loops back once through the rewriter, and a graph models a loop with a hard limit naturally (`MAX_RETRIEVAL_ATTEMPTS = 2`).
 
 ### What is the state object?
 
@@ -345,15 +381,17 @@ A simple chain always runs the same sequence. This project needs branching:
 - `documents` - retrieved evidence records;
 - `plan` - visible reasoning/status steps;
 - `status` - current outcome;
-- `final_answer` - response returned to the API.
+- `final_answer` - response returned to the API;
+- `retrieval_attempts` - how many searches ran (bounds the loop);
+- `grounded` - the verifier's verdict (true, false or unknown).
 
 ### Conversation memory
 
-LangGraph's `MemorySaver` uses `thread_id` to keep the conversation associated with a user session. If the same user asks a follow-up question, the planner and responder can see earlier messages.
+A LangGraph **checkpointer** saves the state after every node, keyed by `thread_id`. On the next request with the same `thread_id`, the graph continues from the saved state, so the planner and responder can see earlier messages. Only `messages` carries over; `new_request_state()` resets the per-question fields. The backend is chosen with `CHECKPOINTER`: `sqlite` (default, a local file that survives restarts), `postgres` (for Cloud Run, where the container disk is temporary and not shared between instances) or `memory` (tests). The UI's **Clear History & Memory** button calls `POST /threads/{thread_id}/reset`.
 
 ### Strong interview answer
 
-> “I used LangGraph because routing is conditional. The planner decides whether retrieval is necessary, then the retriever and responder run only for technical questions. The shared state and thread ID make conversation memory explicit rather than hidden in a global variable.”
+> “I used LangGraph because the flow has branches and a loop. The planner decides whether retrieval is necessary; for technical questions a grader checks the evidence and can send the query back through a rewriter once; a verifier checks the final answer. The routing rules are pure functions I can unit-test, and the checkpointer keyed by thread ID makes conversation memory explicit and persistent rather than hidden in a global variable.”
 
 ---
 
@@ -377,22 +415,24 @@ This makes routing simple and machine-readable.
 
 For a technical question, the responder includes:
 
-- attributed technical context;
+- numbered technical context (`[1] Source: ...`);
 - conversation history;
 - the latest user question;
 - a role instruction such as “Senior Technical Architect.”
 
-The prompt tells the model to answer from supplied context rather than inventing unrelated details.
+The prompt tells the model to answer only from the supplied context, to cite each claim with the source numbers shown, never to invent a source number, and to say so when the context doesn't contain the answer.
+
+The grader, rewriter and verifier prompts ask for machine-readable replies (`{"relevant": [0, 2]}`, one query line, `{"grounded": true}`), and the parsers in `app/agents/routing.py` tolerate the usual LLM decorations around them.
 
 ### Context budget
 
-The responder limits evidence size to avoid exceeding model token limits. More context is not always better: too much irrelevant text can make answers less focused and more expensive.
+`format_context()` caps the evidence at 25,000 characters, and the grader truncates each chunk to 1,200 characters, to stay within model token limits. More context is not always better: too much irrelevant text can make answers less focused and more expensive.
 
 ### Interview question: “How do you reduce hallucinations?”
 
 Good answer:
 
-> “I reduce hallucinations by retrieving source documents first, reranking the best passages, including only bounded context in the generation prompt, showing citations, and measuring faithfulness with the evaluation suite. For higher-risk workflows I would add explicit ‘I do not know’ behavior and confidence thresholds.”
+> “I reduce hallucinations by retrieving source documents first, reranking and then grading the passages so only relevant evidence reaches the prompt, requiring inline citations, returning a fixed ‘not in the documents’ answer when nothing relevant is found, and running a verifier that flags answers not supported by the sources. The evaluation suite measures faithfulness. For higher-risk workflows I would add human review.”
 
 ---
 
@@ -413,13 +453,15 @@ If a rail fires, the application returns a predefined safe response and skips re
 
 It saves model and database work, reduces risk of unnecessary data exposure, and gives consistent behavior for known unsafe patterns.
 
-### Important technical detail
+### Important technical details
 
-The guardrail gate currently uses a Groq-hosted model directly. The main RAG generation path uses Portkey plus Groq routing. Therefore `GROQ_API_KEY` must be correctly configured even if Portkey is configured.
+- The guardrail gate uses a Groq-hosted model (`llama-3.1-8b-instant`) directly. The agent's LLM calls go through Portkey. Therefore `GROQ_API_KEY` must be configured even if Portkey is.
+- The gate lives in `app/services/rag_service.py`, so `/query`, `/query/stream` and the MCP tool are all guarded.
+- It **fails closed**: if the guardrails can't start or the check errors, the request returns an error response instead of running unguarded.
 
 ### Limitations
 
-Pattern-based rail definitions are useful but not a complete security solution. A mature system should add rate limits, authentication, audit logs, input-size controls, red-team testing, and authorization-aware retrieval.
+Pattern-based rail definitions are useful but not a complete security solution. This project adds per-IP rate limits and input-size limits (4,000-character questions, 25 MB uploads). A mature system would also add authentication, audit logs, red-team testing and authorization-aware retrieval.
 
 ---
 
@@ -433,7 +475,7 @@ Returns:
 {"status":"ok","service":"enterprise-agentic-rag"}
 ```
 
-Render uses this to confirm the container is running. It only confirms basic service health; it does not prove that every external provider key is valid.
+CI's Docker job and the Cloud Run deploy workflow call it to confirm the container is running. It is never rate limited. It only confirms basic service health; it does not prove that every external provider key is valid.
 
 ### `POST /query`
 
@@ -446,11 +488,33 @@ Accepts a question and conversation ID.
 }
 ```
 
-Returns an answer, status, visible workflow steps, and evidence records.
+Returns `question`, `answer`, `thought_process` (visible workflow steps), `status`, `sources` (evidence records) and `grounded` (the verifier's verdict).
+
+### `POST /query/stream`
+
+Same request and the same pipeline as `/query`, but the response is a stream of **Server-Sent Events**:
+
+```text
+event: step     data: {"node": "planner", "step": "Intent: Technical", ...}
+event: token    data: {"text": "A Job "}
+event: token    data: {"text": "runs Pods "}
+event: sources  data: {"sources": [...]}
+event: done     data: {"status": "...", "grounded": true, "thought_process": [...], "answer": "..."}
+```
+
+On failure the last event is `error` with a friendly message. The total time is the same as `/query`, but the user sees progress after about a second instead of waiting for the whole answer. SSE fits because the data only flows server → client, and it works over plain HTTP, so rate limiting and validation errors still return normal 429/422 responses.
 
 ### `POST /documents`
 
 Accepts multipart file uploads. It validates supported extension and size, then sends the document through the ingestion pipeline. Successful uploads return the filename and number of indexed chunks.
+
+### `POST /threads/{thread_id}/reset`
+
+Deletes the saved conversation for one `thread_id`.
+
+### Rate limits
+
+`/query` and `/query/stream` share a per-IP budget (`RATE_LIMIT_QUERY`, default `20/minute`); `/documents` has its own (`5/minute`). Exceeding it returns **429** with a `Retry-After` header. Each `/query` costs several paid LLM calls, so without a limit one script could spend the whole budget. The client IP is the TCP peer address; `X-Forwarded-For` is used only when `TRUST_PROXY_HEADERS=true` (behind Cloud Run), and then only its rightmost entry, because clients can forge the rest.
 
 ### Why typed API models matter
 
@@ -464,10 +528,15 @@ The Streamlit UI is the part users see. Its responsibilities are:
 
 - create a session ID for conversation memory;
 - provide a chat experience;
-- call the backend with HTTP requests;
-- show status while the agent works;
-- show retrieved source chunks and relevance;
+- call `/query/stream` and show each step live in the status panel while the agent works;
+- render the answer token by token as it is generated, falling back to `/query` if the stream can't be opened;
+- show retrieved source chunks and relevance, and the grounded badge;
+- show a friendly message on HTTP 429;
 - provide a document-upload workspace.
+
+### MCP server
+
+The same knowledge base is available to AI assistants through the Model Context Protocol (`python -m app.mcp_server`). It exposes three tools: `ask_knowledge_base` (the full guarded agent), `search_knowledge_base` (reranked evidence, no LLM) and `list_indexed_documents`. None of them can upload or delete documents. See `DOCS/13_MCP_SERVER.md`.
 
 ### Upload workflow
 
@@ -493,6 +562,8 @@ For a recruiter or business user, a source panel demonstrates that the applicati
 | Tool correctness | Did the planner take the expected route? |
 | Guardrail precision/recall | Did safety rules block unsafe inputs without blocking valid ones? |
 
+There is also a **retrieval benchmark** (`python -m evals.retrieval_benchmark`) that compares dense search, hybrid search, and each with and without FlashRank on the 15 golden questions (hit rate, MRR, noise rate, latency). It has not been run yet, so there are no numbers to quote; run it before claiming hybrid search helps on this corpus.
+
 ### Golden dataset
 
 A golden dataset is a fixed collection of known questions, expected answers, expected contexts, and expected tool behavior. It is used every time the system changes so developers can detect regressions.
@@ -514,10 +585,12 @@ RAGAS is a framework for evaluating RAG systems. Some metrics use a separate jud
 Logfire records application logs and nested spans. A span is a timed unit of work, for example:
 
 ```text
-Planner decision
-  -> Knowledge retrieval
-     -> Semantic reranking
-        -> LLM synthesis
+Planner Decision
+Knowledge Retrieval
+  -> Semantic Reranking
+Relevance Grading
+LLM Synthesis
+Groundedness Check
 ```
 
 This helps answer: “Where did the request fail?” and “Which stage was slow?”
@@ -538,27 +611,38 @@ They have overlapping but different strengths. Logfire gives application-level s
 
 | Service | Role |
 |---|---|
-| Render | Runs the FastAPI backend inside Docker. |
+| Google Cloud Run | Runs the FastAPI backend container (min 0, max 2 instances). |
+| Artifact Registry | Stores the Docker images, tagged with the git commit SHA. |
+| Secret Manager | Holds the API keys (and `DATABASE_URL`); Cloud Run mounts them as environment variables. |
+| GitHub Actions | CI on every push; a manual workflow builds, pushes and deploys. |
+| Postgres (Neon / Supabase / Cloud SQL), optional | Shared conversation memory across Cloud Run instances. |
 | Streamlit Community Cloud | Hosts the visible web UI. |
 | Qdrant Cloud | Hosts vector database data. |
 | Groq / Portkey / Gemini | Provide model and embedding services. |
 
 ### Why Docker?
 
-Docker packages the backend code and dependencies into a repeatable container. Without it, “works on my machine” problems are common because each computer may have different Python or library versions.
+Docker packages the backend code and dependencies into a repeatable container. Without it, “works on my machine” problems are common because each computer may have different Python or library versions. The image is multi-stage (no compilers in the final image), runs as a non-root user, and has the FlashRank, BM25 and NeMo models baked in so a cold start downloads nothing.
+
+### CI/CD
+
+- **CI** (`.github/workflows/ci.yml`, every push and PR): ruff lint + format check, pytest with a coverage gate, and a Docker build that starts the container with dummy keys and waits for `GET /health`.
+- **CD** (`.github/workflows/deploy-cloud-run.yml`, run manually): authenticates to Google Cloud with Workload Identity Federation (GitHub's OIDC token is exchanged for short-lived credentials, so there is no JSON key), builds and pushes the image, deploys with secrets from Secret Manager, and fails unless the new revision's `/health` returns ok.
 
 ### Health checks
 
-Render calls `/health` to confirm the web process is alive. The backend must listen on `0.0.0.0` and use Render's assigned `PORT`; the Dockerfile supports this.
+Cloud Run's default startup probe only checks that the container accepts connections on `PORT`; the deploy workflow then calls `/health` on the new revision and fails the deploy if it doesn't return ok. The backend listens on `0.0.0.0` and Cloud Run's assigned `PORT`; the Dockerfile supports this.
 
 ### Deployment debugging order
 
 1. Confirm `GET /health` returns `status: ok`.
-2. Confirm all environment variables are configured in Render.
-3. Test a technical query and inspect Render logs.
+2. Confirm every secret exists in Secret Manager and the runtime service account can read it.
+3. Test a technical query and read the Cloud Run logs (`gcloud run services logs read ...`).
 4. Test document upload.
-5. Confirm Streamlit's `BACKEND_URL` is the Render URL without a trailing slash.
+5. Confirm Streamlit's `BACKEND_URL` is the Cloud Run URL without a trailing slash.
 6. Check Logfire/LangSmith for the failing stage.
+
+Full runbook: `DOCS/12_DEPLOYMENT_AND_DEMO.md`.
 
 ---
 
@@ -566,9 +650,13 @@ Render calls `/health` to confirm the web process is alive. The backend must lis
 
 | Decision | Why it was chosen | Trade-off |
 |---|---|---|
-| Qdrant instead of keyword-only search | Semantic search handles paraphrases. | Requires embedding API and vector database operations. |
+| Hybrid dense + BM25 search with RRF | Meaning search handles paraphrases; keyword search finds exact terms; RRF merges ranks without comparing scores. | Two vectors per chunk, and a re-ingest when the schema changed. |
+| Grader + one rewrite + verifier | Catches irrelevant evidence and unsupported answers. | 2 extra LLM calls per technical question, more on a retry. |
+| Grader fails open, guardrails fail closed | A flaky grader must not discard evidence; an unguarded request is worse than a failed one. | A broken grader silently stops filtering; broken guardrails take the query path down. |
 | Reranking after vector search | Improves result quality. | Adds latency and model download/runtime cost. |
-| LangGraph routing | Supports conditional workflows and memory. | More components to understand than one prompt. |
+| LangGraph routing | Supports conditional workflows, a bounded loop and memory. | More components to understand than one prompt. |
+| SQLite locally, Postgres on Cloud Run | The container disk on Cloud Run is temporary and per instance. | One more managed service for persistent memory in production. |
+| In-memory per-IP rate limits | No extra infrastructure. | Limits are per instance (up to 2× with 2 instances). |
 | NeMo Guardrails before retrieval | Blocks known unsafe/off-topic inputs early. | May over-block valid questions if rails are too strict. |
 | Portkey gateway | Centralizes fallback/retry/metadata. | Adds another provider and configuration step. |
 | Source citations | Builds trust and supports debugging. | Citations are evidence signals, not a mathematical proof of truth. |
@@ -585,16 +673,17 @@ Good candidates do not claim a project is perfect. Explain what you would improv
 2. **Persistent upload metadata** - store user uploads and indexing jobs in durable storage instead of relying only on process-local state.
 3. **Async ingestion jobs** - use a queue for large files so the HTTP request does not wait for parsing/embedding.
 4. **Better error reporting** - expose safe, actionable errors to users while keeping technical details in logs.
-5. **Rate limits and quotas** - prevent expensive provider misuse.
-6. **Citation quality checks** - evaluate whether every key answer claim has supporting evidence.
+5. **Shared rate limits and quotas** - per-IP limits exist but are in memory per instance; a Redis-backed limiter and per-user quotas would make them global.
+6. **Citation quality checks** - the verifier judges the whole answer; checking each claim against its cited source would be finer-grained.
 7. **Model configuration** - move model IDs and provider slugs to environment variables; update deprecated models before provider shutdown dates.
-8. **Production tests** - add API integration tests with mocked Gemini, Qdrant, Groq, and Portkey clients.
-9. **Data governance** - define document retention, deletion, PII handling, and tenant isolation.
-10. **Monitoring dashboards** - track latency, retrieval quality, guardrail blocks, token cost, and failed uploads.
+8. **End-to-end tests** - the API, SSE stream, memory and rate limits are tested with fake nodes and mocked clients; a scheduled test against real Qdrant and Groq would catch provider-side changes.
+9. **Run the retrieval benchmark** - and decide `RETRIEVAL_MODE` from measured numbers.
+10. **Data governance** - define document retention, deletion, PII handling, and tenant isolation.
+11. **Monitoring dashboards** - track latency, retrieval quality, guardrail blocks, token cost, and failed uploads.
 
 ### Excellent answer to “What would you do next?”
 
-> “I would make ingestion asynchronous and authenticated, add document-level access control, and build integration tests with provider mocks. Then I would use the golden dataset and production telemetry to tune chunk size, retrieval limits, and reranking thresholds based on measured quality and latency.”
+> “I would make ingestion asynchronous and authenticated, add document-level access control, and move rate limits to a shared store. Then I would run the retrieval benchmark and the RAGAS suite and use production telemetry to tune chunk size, retrieval limits and the retry policy based on measured quality and latency.”
 
 ---
 
@@ -618,15 +707,15 @@ Good candidates do not claim a project is perfect. Explain what you would improv
 
 ### Q5. What is the difference between LangChain and LangGraph?
 
-> “LangChain supplies model and integration abstractions. LangGraph models the conditional workflow between steps. I use LangGraph because the application can route conversational questions directly to a responder and technical questions through retrieval.”
+> “LangChain supplies model and integration abstractions. LangGraph models the conditional workflow between steps, including loops, and persists state with checkpointers. I use LangGraph because conversational questions go straight to the responder, technical questions go through retrieval and grading, and a failed search can loop back once through a rewriter.”
 
 ### Q6. How does memory work?
 
-> “The API receives a `thread_id`. LangGraph's checkpointer associates state with that ID, allowing later messages in the same conversation to use previous messages as history.”
+> “The API receives a `thread_id`. LangGraph's checkpointer saves the graph state under that ID after every node, so later messages in the same conversation see the earlier ones. Locally it's a SQLite file; on Cloud Run it should be Postgres, because the container disk is temporary and each instance has its own.”
 
 ### Q7. How do you prevent hallucinations?
 
-> “I do not claim to eliminate them completely. I reduce risk through retrieval, reranking, bounded evidence context, citation display, guardrails, and metrics such as faithfulness. For high-risk workflows I would add confidence thresholds and human review.”
+> “I do not claim to eliminate them completely. I reduce risk through retrieval, reranking, relevance grading, inline citations, a fixed ‘not in the documents’ answer when evidence is missing, a verifier that flags unsupported answers, and metrics such as faithfulness. For high-risk workflows I would add human review.”
 
 ### Q8. Why do you need guardrails before retrieval?
 
@@ -646,7 +735,7 @@ Good candidates do not claim a project is perfect. Explain what you would improv
 
 ### Q12. Why are API keys environment variables?
 
-> “Keys are secrets and change across environments. Environment variables keep them out of source code and allow Render, local development, and CI to have separate configurations.”
+> “Keys are secrets and change across environments. Environment variables keep them out of source code and let Cloud Run (from Secret Manager), local development (`.env`) and CI (dummy values) have separate configurations.”
 
 ### Q13. What is a health endpoint?
 
@@ -666,16 +755,26 @@ Good candidates do not claim a project is perfect. Explain what you would improv
 
 ---
 
+### Q17. Why stream the answer?
+
+> “The total time doesn't change, but the user sees the plan steps after about a second and starts reading the answer while it's still being written. I used Server-Sent Events because data only flows from server to client, it's plain HTTP, and the same rate limiting and validation apply as for `/query`.”
+
+### Q18. How do you protect a public LLM endpoint from abuse?
+
+> “Guardrails filter the content, and per-IP rate limits cap the volume, returning 429 with Retry-After. The client IP is the TCP peer unless a trusted proxy is configured, because `X-Forwarded-For` is just a header that any client can forge to get a fresh budget per request. Behind Cloud Run I trust only the rightmost entry, which Google's front end appended. Max instances and provider-side budget alerts are the backstop.”
+
+---
+
 ## 20. A five-minute project walkthrough for an interview
 
 Use this order when presenting:
 
 1. **Problem (30 seconds):** “Teams have large technical document sets and need answers they can verify.”
-2. **Architecture (45 seconds):** show the README diagram and explain UI -> API -> guardrail -> planner -> retrieval -> reranking -> answer.
+2. **Architecture (45 seconds):** show the README diagrams and explain UI -> API -> guardrail -> planner -> hybrid retrieval -> reranking -> grading (and the one retry) -> cited answer -> verification.
 3. **Live UI (60 seconds):** upload a small document and ask a technical question.
-4. **Evidence (45 seconds):** open the source panel and explain filename, source type, and relevance scores.
-5. **Code (60 seconds):** show `app/main.py`, `processor.py`, `graph.py`, and `citations.py`.
-6. **Quality (45 seconds):** show `tests/`, GitHub Actions, and the `evals/` folder.
+4. **Evidence (45 seconds):** point at the live steps and streamed tokens, then open the source panel and explain the `[n]` citations, filename, source type, scores and the grounded badge.
+5. **Code (60 seconds):** show `graph.py`, `routing.py`, `rag_service.py` and `qdrant_service.py`.
+6. **Quality (45 seconds):** show `tests/`, the GitHub Actions CI run, the Cloud Run deploy workflow and the `evals/` folder.
 7. **Trade-offs (45 seconds):** explain limitations and planned improvements.
 
 Do not say “I know every library internally.” Say:
@@ -701,7 +800,7 @@ Do not say “I know every library internally.” Say:
 ### Days 5-6: agent workflow
 
 - Read Sections 9-11.
-- Draw Planner -> Retriever -> Responder on paper.
+- Draw planner -> retriever -> grader -> (rewriter) -> responder -> verifier on paper, including the loop and both END paths.
 - Practice explaining why a greeting should skip retrieval.
 
 ### Days 7-8: API and UI

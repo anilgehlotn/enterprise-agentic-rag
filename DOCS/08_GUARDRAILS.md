@@ -295,10 +295,10 @@ In our FastAPI backend, guardrails act as a **fast gate** before the expensive R
 flowchart TD
     A([POST /query]) --> B[NeMo Guardrails\ncheck every message]
     B -- Rail fired\nblocked or pre-answered --> C([Return immediately\nno RAG pipeline])
-    B -- Passed all rails --> D[LangGraph Agent\nPlanner → Retriever → Responder]
-    D --> E[Qdrant Search\ntop-15 chunks]
+    B -- Passed all rails --> D[LangGraph Agent\nplanner → retriever → grader → responder → verifier]
+    D --> E[Qdrant hybrid search\ntop-15 chunks]
     E --> F[FlashRank Reranking\ntop-5 chunks]
-    F --> G[Groq LLM\ngenerate answer]
+    F --> G[Groq via Portkey\ngrade, answer, verify]
     G --> H([Return answer + sources])
 
     style B fill:#f0ad4e,color:#000
@@ -306,8 +306,10 @@ flowchart TD
     style D fill:#5bc0de,color:#000
 ```
 
+The snippet below is the **concept** (from `notebooks/01_guardrails.ipynb`, including a PII action this project doesn't use). The real code is under [How We Implemented Guardrails](#how-we-implemented-guardrails-in-this-system).
+
 ```python
-# app/main.py (conceptual)
+# conceptual sketch, not the project's code
 guardrails = LLMRails(config_prod, llm=groq_llm)
 guardrails.register_action(detect_pii_in_input)
 
@@ -322,7 +324,7 @@ def query(request: QueryRequest):
     return run_rag_agent(request)          # passed — run full pipeline
 ```
 
-**Why this matters:** A jailbreak or PII message never touches Qdrant, FlashRank, or Groq. It's rejected in milliseconds at the gate.
+**Why this matters:** A blocked message never reaches Qdrant, FlashRank or the 70B model. The gate itself costs one call to a small, fast model (`llama-3.1-8b-instant`).
 
 ---
 
@@ -377,22 +379,23 @@ def query(request: QueryRequest):
 ## See Also
 
 - `notebooks/01_guardrails.ipynb` — live runnable experiments from baseline to full production system
-- `app/main.py` — FastAPI entry point where guardrails are integrated
+- `app/services/rag_service.py` — where the gate runs (`_check_guardrails()`), for the API and the MCP server alike
+- `app/main.py` — FastAPI lifespan handler that warms the guardrails at startup
 - `app/agents/graph.py` — LangGraph pipeline that runs after guardrails pass a request
 
 ---
 
 ## How We Implemented Guardrails in This System
 
-All guardrail logic lives in `app/guardrails/` and integrates into `app/main.py` at the `/query` endpoint.
+All guardrail logic lives in `app/guardrails/`. The shared service layer `app/services/rag_service.py` calls it for every entry point: `/query`, `/query/stream` and the MCP tool `ask_knowledge_base`.
 
 ### Files Created
 
 ```
 app/guardrails/
-  __init__.py        ← exports initialize_rails and guard
+  __init__.py        ← exports ensure_rails, guard and initialize_rails
   colang_rules.py    ← Colang definitions, YAML config, RAIL_INDICATORS
-  rails.py           ← singleton LLMRails, initialize_rails(), guard()
+  rails.py           ← singleton LLMRails, initialize_rails(), ensure_rails() (lazy, thread-safe), guard()
 ```
 
 ### The 3 Rails We Use
@@ -481,43 +484,48 @@ Two models are used deliberately:
 
 ---
 
-### Integration in main.py
+### Integration in the service layer
 
-The guard runs as **Gate 1** inside the `/query` endpoint, before LangGraph is ever touched:
+The guard runs as **Gate 1** in `app/services/rag_service.py`, before LangGraph is touched. `/query` (`answer_question`), `/query/stream` (`stream_answer`) and the MCP tool all call the same helper:
 
 ```python
-# app/main.py
+# app/services/rag_service.py (simplified)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    ...
-    rag_service.ensure_rails()   # builds the LLMRails singleton once at boot
-    yield
+def _check_guardrails(question, thread_id):
+    ensure_rails()                       # lazy, idempotent; raises if NeMo can't start
+    rail_fired, rail_response = guard(question)
+    if not rail_fired:
+        return None
+    return {
+        "question": question,
+        "answer": rail_response,
+        "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
+        "status": "Blocked by guardrails.",
+        "sources": [],
+        "grounded": None,
+    }
 
-@app.post("/query")
-def query(request: QueryRequest):
-    # Gate 1: NeMo Guardrails
-    rail_fired, rail_response = guard(q)
-    if rail_fired:
-        return {
-            "question": q,
-            "answer": rail_response,
-            "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
-            "status": "Blocked by guardrails.",
-            "sources": []
-        }
-
-    # Gate 2: LangGraph RAG pipeline
-    final_output = rag_agent.invoke(initial_state, config=config)
-    ...
+def answer_question(question, thread_id):
+    try:
+        blocked = _check_guardrails(question, thread_id)
+        if blocked is not None:
+            return blocked
+        # Gate 2: LangGraph RAG pipeline
+        ...
+    except Exception:
+        return _error_result(question)   # fail closed: never run unguarded
 ```
+
+The FastAPI lifespan handler (`app/main.py`) calls `rag_service.ensure_rails()` once at startup as a warm-up, but the gate does not depend on it: every request calls `ensure_rails()` itself, so the MCP server is guarded too.
+
+**Fail-closed.** If NeMo can't initialise (for example, no `GROQ_API_KEY`) or the guard call raises, `ensure_rails()`/`guard()` raise, and the request returns the generic error response. The question never reaches the agent unguarded. In streaming mode the blocked reply is sent as `token` events followed by `done`.
 
 The `thought_process` field mirrors the planner's existing pattern:
 
 | Scenario | thought_process shown in UI |
 |---|---|
-| Technical question | `["Intent: Technical", "Search Term: ..."]` |
+| Technical question | `["Intent: Technical", "Search Term: ...", "Retrieval attempt 1/2 (hybrid): ...", ...]` |
 | Greeting / memory | `["Intent: Conversational/Memory", "Retrieval: Skipped"]` |
 | Rail fired | `["Intent: Guardrails Fired", "Retrieval: Skipped"]` |
 
-When a rail fires, Qdrant, FlashRank, and the 70B model are **never called** — the request is rejected at the gate in milliseconds.
+When a rail fires, Qdrant, FlashRank and the 70B model are **never called**. The only cost is the guardrail's own call to `llama-3.1-8b-instant`.

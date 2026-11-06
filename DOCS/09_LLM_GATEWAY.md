@@ -312,7 +312,7 @@ portkey.with_options(cache_force_refresh=True).chat.completions.create(...)
 | `simple` | Exact request match | Free / Starter |
 | `semantic` | Similar meaning match | **Enterprise tier only** |
 
-> **Semantic cache on free/starter plans:** If your Portkey account is not on Enterprise, setting `"mode": "semantic"` silently falls back to simple (exact-match) cache behaviour. No error is thrown. The code is correct to set semantic — it will upgrade automatically when the account tier changes.
+> **Semantic cache on free/starter plans:** If your Portkey account is not on Enterprise, setting `"mode": "semantic"` silently falls back to simple (exact-match) cache behaviour. No error is thrown. This project's `GATEWAY_CONFIG` uses `"simple"` explicitly, so the behaviour is the same on every plan.
 
 ---
 
@@ -383,7 +383,7 @@ llm = ChatOpenAI(
 )
 ```
 
-Every LangGraph node — planner, retriever, responder — is now logged, retried, and fallback-protected without changing any node logic.
+Every LLM-calling node (in this project: planner, grader, rewriter and verifier through `ChatOpenAI`, and the responder through the native client) is then logged, retried and fallback-protected without changing node logic. The retriever makes no LLM call.
 
 ---
 
@@ -432,38 +432,22 @@ flowchart TD
 
 ## Integrating the Gateway into the RAG API
 
-In our FastAPI backend, the gateway wraps the LLM before it reaches LangGraph:
+The gateway wraps **each LLM call**, not the whole request. Guardrails, LangGraph routing and Qdrant retrieval run as usual; every time a node needs a model, the call goes through Portkey, which applies the cache, retry and fallback rules to that one call.
 
 ```mermaid
 flowchart TD
-    A([POST /query]) --> B[Portkey Gateway\ncheck cache · retry · fallback]
-    B -- Cache HIT --> C([Return instantly\nno LangGraph, no Qdrant])
-    B -- Cache MISS,\nPassed rules --> D[LangGraph Agent\nPlanner → Retriever → Responder]
-    D --> E[Qdrant Search\ntop-15 chunks]
-    E --> F[FlashRank Reranking\ntop-5 chunks]
-    F --> G[Groq via Portkey\ngenerate answer]
-    G --> H([Return answer + sources])
-
-    style B fill:#f0ad4e,color:#000
-    style C fill:#5cb85c,color:#fff
+    A([POST /query]) --> GR[NeMo Guardrails\ndirect Groq call, not via Portkey]
+    GR --> P[planner]
+    P --> R[retriever\nQdrant + FlashRank, no LLM]
+    R --> GD[grader]
+    GD --> RS[responder]
+    RS --> V[verifier]
+    P & GD & RS & V --> PK[Portkey gateway\ncache · retry · fallback]
+    PK --> G1[Groq llama-3.3-70b-versatile]
+    PK -.fallback.-> G2[Groq llama-3.1-8b-instant]
 ```
 
-```python
-# app/main.py
-from portkey_ai import Portkey, createHeaders, PORTKEY_GATEWAY_URL
-from langchain_openai import ChatOpenAI
-
-gateway_llm = ChatOpenAI(
-    api_key=PORTKEY_API_KEY,
-    base_url=PORTKEY_GATEWAY_URL,
-    model="@flight-policsy/llama-3.3-70b-versatile",
-    default_headers=createHeaders(
-        api_key=PORTKEY_API_KEY,
-        config=PRODUCTION_CONFIG,
-        metadata={"feature": "rag-query"}
-    )
-)
-```
+The project code is in `app/gateway/client.py`; see [How We Integrated the Gateway](#how-we-integrated-the-gateway-in-this-system) below. A cache hit saves one LLM call; it does not skip retrieval or the rest of the graph.
 
 ---
 
@@ -544,63 +528,63 @@ Use both together: guardrails at the gate, gateway for everything that passes th
 ## See Also
 
 - `notebooks/02_llm_gateway.ipynb` — live runnable experiments from baseline to full production gateway
-- `app/main.py` — FastAPI entry point where the gateway wraps all LLM calls
-- `app/agents/nodes/` — swap `ChatGroq` for `ChatOpenAI` + Portkey here
+- `app/gateway/client.py` — the gateway config and both clients
+- `app/agents/llm.py` — `get_llm(feature)`, the cached LangChain client used by planner, grader, rewriter and verifier
 - `DOCS/08_GUARDRAILS.md` — NeMo Guardrails (the safety layer that runs before the gateway)
 
 ---
 
 ## How We Integrated the Gateway in This System
 
-All gateway logic lives in `app/gateway/` and integrates into the LangGraph nodes.
+All gateway logic lives in `app/gateway/`. Nothing is created at import time: both clients are built on first use, so tests and `/health` need no Portkey key.
 
 ### Files Created
 
 ```
 app/gateway/
-  __init__.py    ← exports portkey_client, get_langchain_llm, extract_cache_status
-  client.py      ← GATEWAY_CONFIG, native Portkey client, LangChain LLM factory
+  __init__.py    ← exports get_portkey_client, get_langchain_llm, extract_cache_status
+  client.py      ← GATEWAY_CONFIG, get_portkey_client() (cached native client), get_langchain_llm()
 ```
 
 ### The Gateway Config We Use
 
-Only two features are enabled — everything else (load balancing, timeouts, metadata) is available but not needed for this use case:
+Fallback, simple cache and retries are enabled. Load balancing and timeouts are not used; metadata is added only on the LangChain client (`feature`, `_user`, `environment`):
 
 ```python
 # app/gateway/client.py
 
 GATEWAY_CONFIG = {
     "strategy": {"mode": "fallback"},   # primary → fallback on non-2xx
-    "cache": {"mode": "semantic"},      # Enterprise: similarity match; free: exact match
+    "cache": {"mode": "simple"},        # exact-match cache (semantic needs Portkey Enterprise)
     "retry": {
         "attempts": 2,
         "on_status_codes": [429, 503]   # retry before triggering the fallback
     },
     "targets": [
-        {"override_params": {"model": "@rag/llama-3.3-70b-versatile"}},    # primary
-        {"override_params": {"model": "@brag/llama-3.1-8b-instant"}},      # fallback
+        {"override_params": {"model": f"@{settings.GROQ_SLUG}/llama-3.3-70b-versatile"}},    # "rag": primary
+        {"override_params": {"model": f"@{settings.GROQ_SLUG_2}/llama-3.1-8b-instant"}},     # "brag": fallback
     ]
 }
 ```
 
-**Slugs:** `rag` and `brag` are the Portkey dashboard integration names for the two Groq API keys. The fallback key is stored in `.env` as `GROQ_FALLBACK_API_KEY` — Portkey reads it from the `brag` dashboard integration, not from code.
+**Slugs:** `rag` and `brag` (`GROQ_SLUG`, `GROQ_SLUG_2` in `app/config.py`) are the Portkey dashboard integration names for the two Groq API keys. Portkey holds those keys; the code never sends them. `GROQ_FALLBACK_API_KEY` in `.env` is read into `settings` but not used by any code path.
 
 ### Two Clients, Two Purposes
 
 | Client | Used in | Why |
 |---|---|---|
-| `portkey_client` (native) | `responder.py` | Exposes response headers → can read `x-portkey-cache-status` |
-| `get_langchain_llm()` (ChatOpenAI) | `planner.py` | Preserves `.invoke()` interface — zero logic changes to node |
+| `get_portkey_client()` (native `Portkey`) | `responder.py` | Exposes response headers → can read `x-portkey-cache-status`; supports `stream=True` for `/query/stream` |
+| `get_langchain_llm()` (ChatOpenAI), via `app/agents/llm.get_llm(feature)` | `planner.py`, `grader.py`, `rewriter.py`, `verifier.py` | Preserves the `.invoke()` interface; `feature` tags each call in Portkey analytics |
 
 ### Cache Hit Detection
 
-The Portkey Python SDK does not expose response headers on the plain `.create()` return object directly. `extract_cache_status()` in `app/gateway/client.py` checks several private attribute paths (`_raw_response`, `_response`, `_http_response`) that different SDK versions may use. If none are found it returns `"MISS"` — the app works normally, the cache still happens on Portkey's side, and the hit is visible in the Portkey dashboard. The UI label is best-effort.
+The Portkey Python SDK does not expose response headers on the plain `.create()` return object directly. `extract_cache_status()` in `app/gateway/client.py` checks several attribute paths (`_raw_response`, `_response`, `_http_response`) that different SDK versions may use, and finally `response`, where a **streamed** completion (the OpenAI `Stream` object) keeps its HTTP response, so the header is readable before the stream is consumed. If none are found it returns `"MISS"` — the app works normally, the cache still happens on Portkey's side, and the hit is visible in the Portkey dashboard. The UI label is best-effort.
 
 ```python
 # app/gateway/client.py
 
 def extract_cache_status(response) -> str:
-    for attr in ("_raw_response", "_response", "_http_response"):
+    for attr in ("_raw_response", "_response", "_http_response", "response"):
         raw = getattr(response, attr, None)
         if raw is not None:
             status = getattr(raw, "headers", {}).get("x-portkey-cache-status", "")
@@ -610,14 +594,12 @@ def extract_cache_status(response) -> str:
 ```
 
 ```python
-# app/agents/nodes/responder.py
+# app/agents/nodes/responder.py (non-streaming path, used by /query)
 
-response = portkey_client.chat.completions.create(
-    messages=[{"role": "user", "content": prompt}],
-    temperature=0.1
+response = get_portkey_client().chat.completions.create(
+    messages=[{"role": "user", "content": prompt}], temperature=0.1
 )
-content = response.choices[0].message.content
-cache_status = extract_cache_status(response)
+content, cache_status = response.choices[0].message.content, extract_cache_status(response)
 is_cache_hit = cache_status == "HIT"
 ```
 
@@ -627,8 +609,8 @@ The `thought_process` field in the API response (shown as the plan in the UI) re
 
 | Scenario | `thought_process` |
 |---|---|
-| Technical question, cache miss | `["Intent: Technical", "Search Term: ...", "Context Retrieved"]` |
-| Technical question, cache hit | `["Intent: Technical", "Search Term: ...", "Context Retrieved", "Cache: Hit ⚡"]` |
+| Technical question, cache miss | `["Intent: Technical", "Search Term: ...", "Retrieval attempt 1/2 (hybrid): 5 chunks retrieved for '...'", "Grading (attempt 1): 3/5 chunks relevant", "Verification: answer supported by sources ✅"]` |
+| Technical question, cache hit | the same, with `"Cache: Hit ⚡"` added after the grading step |
 | Conversational | `["Intent: Conversational/Memory", "Retrieval: Skipped"]` |
 | Guardrails fired | `["Intent: Guardrails Fired", "Retrieval: Skipped"]` |
 
@@ -641,4 +623,4 @@ The `thought_process` field in the API response (shown as the plan in the UI) re
 
 ### Portkey Dashboard — Automatic
 
-Every request that passes through Portkey (planner + responder) is **automatically visible** in portkey.ai → Logs with no extra code: full prompt, response, token count, cost, latency, model actually used (primary or fallback), and cache status (HIT/MISS). This works purely because the `PORTKEY_API_KEY` is present in every request.
+Every request that passes through Portkey (planner, grader, rewriter, responder, verifier) is **automatically visible** in portkey.ai → Logs with no extra code: full prompt, response, token count, cost, latency, model actually used (primary or fallback), and cache status (HIT/MISS). This works purely because the `PORTKEY_API_KEY` is present in every request.

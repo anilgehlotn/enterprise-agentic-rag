@@ -330,7 +330,7 @@ Use a question from `DATA/true_data/`. The planner classifies the request. Qdran
 
 ### 8.1 Why SQLite is not enough on Cloud Run
 
-Locally the default `CHECKPOINTER=sqlite` keeps conversations in `./state/checkpoints.sqlite`, so they survive an API restart. On Cloud Run that file would live on the container's **in-memory filesystem**: it is wiped whenever an instance stops (scale to zero after ~15 idle minutes, every deploy), and each of the up to 2 instances has its **own** copy. A follow-up question routed to the other instance would see no history. Conversation memory on Cloud Run therefore needs a database every instance shares: `CHECKPOINTER=postgres`.
+Locally the default `CHECKPOINTER=sqlite` keeps conversations in `state/checkpoints.sqlite` under the project root, so they survive an API restart. On Cloud Run that file would live on the container's **in-memory filesystem**: it is wiped whenever an instance stops (scale to zero after ~15 idle minutes, every deploy), and each of the up to 2 instances has its **own** copy. A follow-up question routed to the other instance would see no history. Conversation memory on Cloud Run therefore needs a database every instance shares: `CHECKPOINTER=postgres`.
 
 Without the steps below, the deploy uses `sqlite`: it works, but memory is per instance and temporary.
 

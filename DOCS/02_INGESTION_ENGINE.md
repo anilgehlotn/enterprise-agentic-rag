@@ -26,15 +26,15 @@ graph LR
 
 ### 1. Smart Parsing (Local, No External OCR)
 All document parsing runs entirely on-device — no external OCR service or cloud API is required:
-*   **PDFs**: Parsed locally via **pypdf** (primary) and **pdfplumber** (fallback for complex layouts). Handles multi-page PDFs without any page-count limits.
+*   **PDFs**: Parsed locally via **pypdf**; pages where pypdf returns no text are retried with **pdfplumber**. There is no OCR, so fully image-based PDFs yield no text and are skipped.
 *   **HTML**: Processed via **BeautifulSoup**. It intelligently strips out `<script>`, `<style>`, and metadata tags to extract only the readable content.
 *   **Office Docs**: Supports `.docx` via `python-docx` and `.pptx` via `python-pptx`.
 *   **Plain Text**: Loaded directly with a simple text reader.
 
 ### 2. Semantic Chunking
 *   **Chunk Size**: `1500` characters.
-*   **Overlap**: Natural overlap (we split by paragraph breaks `\n\n` rather than arbitrary character counts).
-*   **Logic**: The system uses a semantic-ish, paragraph-aware splitter. It attempts to keep paragraphs together to maintain context, ensuring that no chunk is cut off mid-sentence whenever possible. This prevents the LLM from getting "hallucinated" fragments.
+*   **Overlap**: None. Chunks are split at paragraph breaks (`\n\n`), not at arbitrary character counts.
+*   **Logic**: A paragraph-aware splitter (`app/ingestion/chunking/splitter.py`) packs whole paragraphs into chunks of at most 1,500 characters. A single paragraph longer than that is split at the last space before the limit, so no chunk exceeds the size.
 
 ### 3. Vectorization & Storage (hybrid: dense + BM25)
 Every chunk is stored as **one Qdrant point with two named vectors**, so one collection serves both retrieval modes (`RETRIEVAL_MODE=hybrid` or `dense`):

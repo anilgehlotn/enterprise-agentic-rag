@@ -24,7 +24,7 @@ Built on the official Python SDK, **`mcp==2.3.0`** (`from mcp.server.mcpserver i
 
 ## Tools
 
-All three tools are **read-only** (`readOnlyHint: true`, `destructiveHint: false`). There is no upload, write or delete tool.
+All three tools are **read-only** with respect to the knowledge base (`readOnlyHint: true`, `destructiveHint: false`). There is no upload, write or delete tool. The one thing a call stores is conversation memory: `ask_knowledge_base` records the question and answer under its `thread_id` in the checkpointer.
 
 ### `ask_knowledge_base`
 
@@ -155,6 +155,8 @@ Run these from the project root, or set `PYTHONPATH` to it. The server loads `<p
 | `LOGFIRE_TOKEN` (optional) | Send traces to Logfire; without it traces print to stderr only |
 | `ENABLE_SELF_CORRECTION` (optional) | `false` = linear agent (no grader/rewriter/verifier) |
 | `PROCESSED_DATA_DIR` (optional) | Where `list_indexed_documents` looks |
+| `QDRANT_COLLECTION`, `RETRIEVAL_MODE` (optional) | Same meaning as for the API (`enterprise_rag` default; `hybrid` default) |
+| `CHECKPOINTER`, `SQLITE_CHECKPOINT_PATH`, `DATABASE_URL` (optional) | Where `ask_knowledge_base` stores conversation memory per `thread_id` (default: SQLite at `<project root>/state/checkpoints.sqlite`, whatever the working directory) |
 
 If they're already in `.env`, you don't need to repeat them in the client config. `list_indexed_documents` works with no keys at all.
 
@@ -246,7 +248,7 @@ For HTTP, start `python -m app.mcp_server --transport http --port 8001`, run `np
 
 ## Security notes
 
-- **Read-only tools.** Nothing exposed over MCP can upload, modify or delete documents, the vector index or any other state. Uploading stays a deliberate action in the web UI/API. A client LLM that gets tricked by a prompt injection can still only read.
+- **Read-only tools.** Nothing exposed over MCP can upload, modify or delete documents or the vector index; the only write is `ask_knowledge_base`'s conversation memory for its `thread_id`. Uploading stays a deliberate action in the web UI/API. A client LLM that gets tricked by a prompt injection can still only read.
 - **Guardrails apply to MCP too.** Both the API and MCP call `rag_service.answer_question()`, which initialises NeMo Guardrails lazily (once per process) and gates every question. If guardrails can't start, the request fails closed (error), and never runs unguarded.
 - **Localhost by default.** The HTTP transport binds to `127.0.0.1`, and the SDK's DNS-rebinding protection is active for localhost. The tools have **no authentication**: don't bind to `0.0.0.0` or a public interface unless an authenticating reverse proxy sits in front. The server logs a warning if you try.
 - **Input limits.** Questions and queries are capped at 4000 characters and `top_k` at 20, which bounds cost per call.

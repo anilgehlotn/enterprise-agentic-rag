@@ -104,11 +104,11 @@ flowchart TD
 For each of the 15 golden questions, `evals/pipeline.py`:
 1. Sends a `POST /query` request to the running FastAPI app (`localhost:8000`)
 2. Captures `answer` (truncated to 300 chars), `sources` (actual retrieved chunks), `thought_process`
-3. Parses `thought_process` to detect which tool was called:
-   - `"Intent: Technical"` → `retrieve_documents`
-   - `"Intent: Conversational/Memory"` → `direct_answer`
+3. Parses `thought_process` to detect which tool was called (`detect_tool()`):
    - `"Intent: Guardrails Fired"` → `guardrails`
-4. Waits 10 seconds between calls (Groq RPM buffer on the main key)
+   - `"Intent: Technical"`, `"Search Term:"` or `"Retrieval attempt"` → `retrieve_documents` (checked before "memory", because a rewritten query such as "kubernetes memory limits" would otherwise look conversational)
+   - `"Intent: Conversational/Memory"` → `direct_answer`
+4. Waits 10 seconds between calls (Groq RPM buffer on the main key). That is 6 requests per minute, well under the API's default rate limit of `RATE_LIMIT_QUERY=20/minute`; the 6 guardrail cases are sent 2 seconds apart.
 
 > **Why truncate to 300 chars?**  
 > RAGAS judges the response against the context. 300 chars is enough for the LLM judge to evaluate faithfulness and relevancy. Passing the full response would double the token cost with no accuracy gain.
@@ -197,13 +197,14 @@ If both ran on the same key, a single eval run would rate-limit your live app mi
 
 #### Phase 1 — Response Generation (`GROQ_API_KEY`, llama-3.3-70b-versatile via Portkey)
 
-| Task | Calls | Tokens/call | Total tokens |
-|------|-------|-------------|--------------|
-| 15 RAG questions (prompt + context + response) | 15 | ~1,850 | ~27,750 |
-| 6 guardrails tests | 6 | ~500 | ~3,000 |
-| **Phase 1 total** | **21** | | **~30,750** |
+Each request first passes the guardrail check (one `llama-3.1-8b-instant` call, made directly with `GROQ_API_KEY`). With the default self-correcting agent, each technical question then makes at least 4 gateway calls (planner, grader, responder, verifier), plus a rewriter call and a second grader call when the first retrieval finds nothing relevant.
 
-With 10s delay between calls: ~3.5 min. Daily limit for 70b: 100,000 TPD ✅
+| Task | HTTP requests | LLM calls |
+|------|---------------|-----------|
+| 15 RAG questions | 15 | 15 guardrail + at least 60 agent calls (4 per question) |
+| 6 guardrails tests | 6 | 6 guardrail + agent calls only for inputs that pass the gate |
+
+The token totals in the earlier version of this table (~1,850 tokens per question) were measured before the grader and verifier existed and have not been re-measured. Expect more tokens per technical question than before (the grader prompt alone is about 1,500 input tokens, per the comment in `app/agents/nodes/grader.py`), but the new total is unmeasured. Set `ENABLE_SELF_CORRECTION=false` on the API to reproduce the original single-call-per-question budget.
 
 #### Phase 2 — RAGAS Metrics (`JUDGE_GROQ`, llama-3.1-8b-instant)
 
@@ -253,7 +254,7 @@ The Streamlit app uses `nest_asyncio.apply()` to allow async code to run from wi
 
 | Phase | Duration |
 |-------|----------|
-| Phase 1 — 21 calls × 10s spacing | ~3.5 min |
+| Phase 1 — 15 questions × 10s spacing + response time, then 6 guardrail cases | ~3.5–5 min (not re-measured since self-correction) |
 | Phase 2 — 5 experiments × 15 samples × 40s waits + 4 × 62s inter-experiment cooldowns | ~50 min |
 | **Total** | **~54 min** |
 
