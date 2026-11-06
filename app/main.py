@@ -16,26 +16,49 @@ load_dotenv()
 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"), send_to_logfire="if-token-present")
 
 # Now safe to import app modules - logfire is already active
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+import json
+from collections.abc import Iterator
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import Path as PathParam
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.agents.graph import get_rag_agent
+from app.agents.checkpointer import open_checkpointer
+from app.agents.graph import get_rag_agent, shutdown_rag_agent
 from app.ingestion.processor import process_file
-from app.schemas import MAX_QUESTION_CHARS, QueryResponse
+from app.rate_limit import limit_queries, limit_uploads, validate_rate_limits
+from app.schemas import MAX_QUESTION_CHARS, MAX_THREAD_ID_CHARS, QueryResponse
 from app.services import rag_service
 from app.services.retrieval.schema import resolve_retrieval_mode
 
-# Initialize FastAPI
-app = FastAPI(title="Enterprise Agentic RAG API")
 
-
-@app.on_event("startup")
-def startup_event():
-    # Fail fast on a mistyped RETRIEVAL_MODE instead of failing on the first query.
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """
+    Startup: validate configuration, open the checkpointer, warm the guardrails.
+    Shutdown (after the server stops accepting requests): close the checkpointer's
+    SQLite file / Postgres pool, so no connection is left half-open on SIGTERM.
+    """
+    # Fail fast on a mistyped RETRIEVAL_MODE / RATE_LIMIT_* / CHECKPOINTER instead of
+    # failing on the first query.
     resolve_retrieval_mode()
-    # Warm-up only: rag_service.answer_question() also calls ensure_rails(), which is
-    # idempotent, so every entry point (API and MCP server) is guarded either way.
-    rag_service.ensure_rails()
+    validate_rate_limits()
+    # Raises ValueError on an invalid CHECKPOINTER value; for postgres it connects and
+    # creates the checkpoint tables (setup()) here, once per process.
+    open_checkpointer()
+    try:
+        # Warm-up only: rag_service.answer_question() also calls ensure_rails(), which is
+        # idempotent, so every entry point (API and MCP server) is guarded either way.
+        rag_service.ensure_rails()
+        yield
+    finally:
+        shutdown_rag_agent()
+
+
+# Initialize FastAPI
+app = FastAPI(title="Enterprise Agentic RAG API", lifespan=lifespan)
 
 
 class QueryRequest(BaseModel):
@@ -76,7 +99,12 @@ def get_graph_image():
         return {"error": f"Could not generate graph image: {e}"}
 
 
-@app.post("/documents", response_model=list[UploadResult], status_code=201)
+@app.post(
+    "/documents",
+    response_model=list[UploadResult],
+    status_code=201,
+    dependencies=[Depends(limit_uploads)],
+)
 async def upload_documents(files: list[UploadFile] = File(...)):
     """Validate, index, and retain source metadata for user-provided documents."""
     if not files:
@@ -118,10 +146,47 @@ async def upload_documents(files: list[UploadFile] = File(...)):
     return uploaded
 
 
-@app.post("/query", response_model=QueryResponse)
+@app.post("/query", response_model=QueryResponse, dependencies=[Depends(limit_queries)])
 def query(request: QueryRequest):
     """
     Executes the guardrails gate + LangGraph RAG flow with memory.
     The logic lives in app.services.rag_service so the MCP server shares it.
     """
     return rag_service.answer_question(request.q, request.thread_id)
+
+
+def _sse(events: Iterator[tuple[str, dict]]) -> Iterator[str]:
+    """Formats (event, data) pairs as Server-Sent Events: `event: <type>` + one-line JSON `data:`."""
+    for event, data in events:
+        yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.post("/query/stream", dependencies=[Depends(limit_queries)])
+def query_stream(request: QueryRequest):
+    """
+    Same request body and same guardrails + agent path as /query, streamed as
+    Server-Sent Events: step* → token* → sources → done (or a final error event).
+    The rate limit and request validation run before the stream starts, so they
+    still return normal 429 / 422 responses.
+    """
+    return StreamingResponse(
+        _sse(rag_service.stream_answer(request.q, request.thread_id)),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Stop reverse proxies (nginx, some ingress controllers) from buffering
+            # the stream into one late response.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/threads/{thread_id}/reset")
+def reset_thread(thread_id: str = PathParam(min_length=1, max_length=MAX_THREAD_ID_CHARS)):
+    """Clears the conversation memory (all checkpoints) of one thread."""
+    try:
+        rag_service.reset_thread(thread_id)
+    except Exception as exc:
+        logfire.error(f"Could not reset thread {thread_id}: {exc}")
+        raise HTTPException(status_code=503, detail="Conversation memory is unavailable; try again.") from None
+    return {"thread_id": thread_id, "status": "cleared"}

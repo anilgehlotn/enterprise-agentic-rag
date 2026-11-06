@@ -128,7 +128,20 @@ def build_graph(
 
 @lru_cache(maxsize=1)
 def get_rag_agent():
-    """Production graph: real nodes + MemorySaver (memory per thread_id). Built once per process."""
-    from langgraph.checkpoint.memory import MemorySaver
+    """
+    Production graph: real nodes + the process checkpointer (memory per thread_id;
+    backend chosen by CHECKPOINTER, see app/agents/checkpointer.py). Built once per process.
+    """
+    from app.agents.checkpointer import get_checkpointer
 
-    return build_graph(checkpointer=MemorySaver(), self_correction=self_correction_enabled())
+    return build_graph(checkpointer=get_checkpointer(), self_correction=self_correction_enabled())
+
+
+def shutdown_rag_agent() -> None:
+    """Closes the checkpointer connection and drops the cached graph that holds it."""
+    from app.agents.checkpointer import close_checkpointer
+
+    try:
+        close_checkpointer()  # first: the connection must be released even if the rest fails
+    finally:
+        get_rag_agent.cache_clear()

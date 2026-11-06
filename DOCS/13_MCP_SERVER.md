@@ -252,7 +252,7 @@ For HTTP, start `python -m app.mcp_server --transport http --port 8001`, run `np
 - **Input limits.** Questions and queries are capped at 4000 characters and `top_k` at 20, which bounds cost per call.
 - **No leaking internals.** Errors returned to the client are generic; stack traces, hostnames and keys stay in the server log.
 - **stdout is the protocol in stdio mode.** All logging (Python `logging`, Logfire console, uvicorn) goes to stderr, and the SDK points file descriptor 1 at stderr while serving, so a stray `print()` in a dependency can't corrupt the JSON-RPC stream.
-- **Shared memory per `thread_id`.** Conversation memory is keyed by `thread_id` and kept in process. Use a distinct `thread_id` per user or session if several people share one HTTP server.
+- **Shared memory per `thread_id`.** Conversation memory is keyed by `thread_id` and stored by the checkpointer selected with `CHECKPOINTER` (default: the SQLite file `./state/checkpoints.sqlite`, shared with the API when both run from the project root). Use a distinct `thread_id` per user or session if several people share one HTTP server.
 
 ## Tests
 

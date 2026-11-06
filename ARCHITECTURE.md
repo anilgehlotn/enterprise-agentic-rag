@@ -23,7 +23,7 @@ graph LR
         PL["🗺️ Planner\nIntent Classification"]
         RT["🔍 Retriever\nVector Search"]
         RS["💬 Responder\nAnswer Generation"]
-        MEM[("💾 MemorySaver\nConversation History")]
+        MEM[("💾 Checkpointer (SQLite / Postgres)\nConversation History")]
     end
 
     %% ── Retrieval ────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ graph TB
         PL["🗺️ Planner Node\nIntent Classification"]
         RT["🔍 Retriever Node\nVector Search"]
         RS["💬 Responder Node\nAnswer Generation"]
-        MEM[("💾 MemorySaver\nConversation History")]
+        MEM[("💾 Checkpointer (SQLite / Postgres)\nConversation History")]
     end
 
     subgraph KNOWLEDGE ["4. Knowledge & LLMs"]

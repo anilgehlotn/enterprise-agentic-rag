@@ -23,7 +23,7 @@ Enterprise teams need answers they can verify, not a generic chatbot. This proje
 
 | Area | Implementation |
 |---|---|
-| API | FastAPI with typed `/query` and `/health` endpoints |
+| API | FastAPI with typed `/query`, streaming `/query/stream` (SSE) and `/health` endpoints; per-IP rate limits |
 | Agent orchestration | LangGraph planner, retriever, and responder nodes with thread memory |
 | Retrieval | Hybrid dense (Gemini) + sparse (BM25) search with Qdrant RRF fusion, then FlashRank reranking |
 | LLM access | Portkey gateway with Groq primary/fallback routing |

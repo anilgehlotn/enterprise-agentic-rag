@@ -4,6 +4,8 @@ from pydantic import BaseModel
 
 # Shared input limit for the /query API and the MCP ask_knowledge_base tool.
 MAX_QUESTION_CHARS = 4_000
+# Shared thread_id limit for the MCP tool and POST /threads/{thread_id}/reset.
+MAX_THREAD_ID_CHARS = 200
 
 
 class SourceChunk(BaseModel):

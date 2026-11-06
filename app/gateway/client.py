@@ -54,8 +54,10 @@ def extract_cache_status(response) -> str:
     """
     Pull x-portkey-cache-status from the Portkey native client response headers.
     Tries multiple attribute paths defensively — returns 'MISS' if not found.
+    `response` (last) is where a streamed completion (OpenAI Stream object) keeps its
+    httpx.Response, so the header is readable before the stream is consumed.
     """
-    for attr in ("_raw_response", "_response", "_http_response"):
+    for attr in ("_raw_response", "_response", "_http_response", "response"):
         raw = getattr(response, attr, None)
         if raw is not None:
             status = getattr(raw, "headers", {}).get("x-portkey-cache-status", "")

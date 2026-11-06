@@ -226,6 +226,7 @@ GitHub → repository → **Settings → Secrets and variables → Actions → V
 | `GCP_SERVICE_ACCOUNT` | `github-deployer@<project-id>.iam.gserviceaccount.com` |
 | `AR_REPOSITORY` | `enterprise-rag` |
 | `CLOUD_RUN_RUNTIME_SA` | `rag-runtime@<project-id>.iam.gserviceaccount.com` (recommended; if unset, Cloud Run uses the default compute SA) |
+| `CHECKPOINTER` | Optional. `postgres` for persistent conversation memory (needs the `DATABASE_URL` secret, see section 8). Unset = `sqlite`, which on Cloud Run is per instance and lost on scale-down. |
 
 Or with the GitHub CLI:
 
@@ -322,3 +323,62 @@ Use a question from `DATA/true_data/`. The planner classifies the request. Qdran
 - `/health` on the Cloud Run URL and the Streamlit source panel;
 - the **CI** run: lint, test (coverage in the log, `coverage.xml` artifact) and docker (image built and `/health` checked) as three parallel jobs;
 - the **Deploy to Cloud Run** run: keyless WIF auth, SHA-tagged image, secrets from Secret Manager, post-deploy health gate.
+
+---
+
+## 8. Conversation memory, streaming and rate limits on Cloud Run
+
+### 8.1 Why SQLite is not enough on Cloud Run
+
+Locally the default `CHECKPOINTER=sqlite` keeps conversations in `./state/checkpoints.sqlite`, so they survive an API restart. On Cloud Run that file would live on the container's **in-memory filesystem**: it is wiped whenever an instance stops (scale to zero after ~15 idle minutes, every deploy), and each of the up to 2 instances has its **own** copy. A follow-up question routed to the other instance would see no history. Conversation memory on Cloud Run therefore needs a database every instance shares: `CHECKPOINTER=postgres`.
+
+Without the steps below, the deploy uses `sqlite`: it works, but memory is per instance and temporary.
+
+### 8.2 Create a Postgres database
+
+Any Postgres 13+ works. Options, cheapest first:
+
+| Option | Cost | Notes |
+|---|---|---|
+| [Neon](https://neon.tech) free tier | $0 | Serverless; suspends when idle (first query after idle takes ~1 s; the connection pool replaces dropped connections). Use the connection string with `sslmode=require`. |
+| [Supabase](https://supabase.com) free tier | $0 | Use the **session pooler** or direct connection string. Prepared statements are disabled in the app, so the transaction pooler also works. |
+| Cloud SQL for PostgreSQL | from ~$10/month (smallest shared-core instance) | Same GCP project; connect with the Cloud SQL connector / `--add-cloudsql-instances`, or a private IP + Serverless VPC connector. |
+
+The app creates its tables on startup (`PostgresSaver.setup()`: `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`). It is idempotent, so every new instance can run it.
+
+### 8.3 Store DATABASE_URL in Secret Manager and switch the backend
+
+`DATABASE_URL` contains the database password, so it is a secret like the API keys (section 2.3), never a plain env var:
+
+```bash
+gcloud secrets create DATABASE_URL --replication-policy=automatic
+read -rsp "DATABASE_URL: " value; echo
+printf '%s' "$value" | gcloud secrets versions add DATABASE_URL --data-file=-
+unset value
+
+# The runtime service account must be able to read it (same as the other secrets).
+gcloud secrets add-iam-policy-binding DATABASE_URL \
+  --member="serviceAccount:$RUNTIME_SA_EMAIL" --role=roles/secretmanager.secretAccessor
+
+# Tell the deploy workflow to use Postgres (a repository variable, not a secret).
+gh variable set CHECKPOINTER --body postgres
+```
+
+With `vars.CHECKPOINTER == 'postgres'` the deploy workflow sets `CHECKPOINTER=postgres` and mounts `DATABASE_URL=DATABASE_URL:latest`. If the database is unreachable or the URL is wrong, startup fails, so the deploy's `/health` gate catches it instead of the first user.
+
+Check it after a deploy: ask a question, wait for scale-to-zero (or redeploy), then ask a follow-up such as "what did I just ask?" on the same `thread_id`.
+
+### 8.4 Streaming (`POST /query/stream`)
+
+Same body as `/query`; the response is `text/event-stream` with `step`, `token`, `sources`, `done` (or `error`) events. Cloud Run streams HTTP/1.1 chunked responses without buffering, and the 300 s request timeout covers the longest self-correcting run. Try it:
+
+```bash
+curl -N -X POST "$URL/query/stream" -H 'Content-Type: application/json' \
+  -d '{"q": "What is a Kubernetes CronJob?", "thread_id": "demo"}'
+```
+
+### 8.5 Rate limits
+
+The deploy sets `TRUST_PROXY_HEADERS=true`: requests reach the container through Google's front end, so the TCP peer is Google's proxy, not the user, and every user would otherwise share one budget. The image starts uvicorn with `--no-proxy-headers`, so uvicorn never rewrites the client address itself and `TRUST_PROXY_HEADERS` is the only switch. The app uses the **rightmost** `X-Forwarded-For` entry, the address Google's front end appended; entries to its left are whatever the client sent and can be forged. If you later put an external HTTPS load balancer in front of Cloud Run, the rightmost entry becomes the load balancer's address: check the header in the logs and adjust `client_ip()` in `app/rate_limit.py`.
+
+Defaults: `RATE_LIMIT_QUERY=20/minute` (shared by `/query` and `/query/stream`) and `RATE_LIMIT_UPLOAD=5/minute`, per client IP. Counters are in memory **per instance**, so with `--max-instances=2` a client can get up to 2× the limit; that is acceptable here and keeps Redis out of the stack. The limit protects the LLM budget per client; keep the provider-side budget alerts from section 6 as the global backstop.

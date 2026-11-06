@@ -2,6 +2,7 @@ import logfire
 
 from app.agents.routing import is_conversational
 from app.agents.state import AgentState, conversation_history, latest_user_question
+from app.agents.streaming import token_writer
 from app.services.retrieval.citations import format_context
 
 
@@ -37,6 +38,45 @@ def build_technical_prompt(documents: list[dict], history: str, question: str) -
         USER QUESTION:
         "{question}"
         """
+
+
+def _complete(prompt: str) -> tuple[str, str]:
+    """One non-streaming LLM call (the /query path, unchanged). Returns (text, cache status)."""
+    # Imported lazily so importing this module needs no Portkey client or API key.
+    from app.gateway import extract_cache_status, get_portkey_client
+
+    response = get_portkey_client().chat.completions.create(
+        messages=[{"role": "user", "content": prompt}], temperature=0.1
+    )
+    return response.choices[0].message.content, extract_cache_status(response)
+
+
+def _complete_streaming(prompt: str, emit) -> tuple[str, str]:
+    """
+    Streams the LLM answer, emitting each text chunk as it arrives (the /query/stream
+    path). Returns the full text and the cache status.
+
+    Cache detection: with stream=True Portkey returns the OpenAI Stream object, whose
+    .response holds the HTTP response, so x-portkey-cache-status is read from the
+    headers before the body is consumed. If the gateway omits that header for a
+    streamed response, extract_cache_status() returns "MISS" and the "Cache: Hit"
+    step is simply not shown; the answer itself is unaffected.
+    """
+    from app.gateway import extract_cache_status, get_portkey_client
+
+    stream = get_portkey_client().chat.completions.create(
+        messages=[{"role": "user", "content": prompt}], temperature=0.1, stream=True
+    )
+    cache_status = extract_cache_status(stream)
+    parts = []
+    for chunk in stream:
+        if not chunk.choices:  # e.g. a trailing usage-only chunk
+            continue
+        text = chunk.choices[0].delta.content
+        if text:
+            parts.append(text)
+            emit(text)
+    return "".join(parts), cache_status
 
 
 def generate_node(state: AgentState):
@@ -75,16 +115,13 @@ def generate_node(state: AgentState):
         logfire.info("Generating technical RAG response.")
         prompt = build_technical_prompt(documents, history_str, user_msg)
 
-    # Imported lazily so importing this module needs no Portkey client or API key.
-    from app.gateway import extract_cache_status, get_portkey_client
-
     with logfire.span("✍️ LLM Synthesis"):
         try:
-            response = get_portkey_client().chat.completions.create(
-                messages=[{"role": "user", "content": prompt}], temperature=0.1
-            )
-            content = response.choices[0].message.content
-            cache_status = extract_cache_status(response)
+            emit = token_writer()
+            if emit is None:
+                content, cache_status = _complete(prompt)
+            else:
+                content, cache_status = _complete_streaming(prompt, emit)
             is_cache_hit = cache_status == "HIT"
 
             if is_cache_hit:

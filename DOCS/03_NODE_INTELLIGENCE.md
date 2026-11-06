@@ -50,7 +50,7 @@ graph TD
 ---
 
 ## 💾 State & Memory
-*   **Memory**: The graph uses `MemorySaver`. This allows the agent to maintain a "thread" of conversation. Even if the backend restarts, the agent can recall previous turns if the same `thread_id` is used.
+*   **Memory**: The graph uses a LangGraph checkpointer chosen by `CHECKPOINTER` (`app/agents/checkpointer.py`): `sqlite` (default, a local file), `postgres` (shared, for Cloud Run) or `memory` (in-process). It saves the state per `thread_id` after every node, so the agent recalls previous turns on the same `thread_id`. With `sqlite` or `postgres` this survives a backend restart; with `memory` it does not. `POST /threads/{thread_id}/reset` clears one conversation.
 *   **State**: The `AgentState` object tracks:
     *   `messages`: The full chat history.
     *   `current_query`: The optimized search term.
