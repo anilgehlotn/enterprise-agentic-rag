@@ -61,3 +61,7 @@ tenvv
 coverage.xml
 htmlcov/
 .ruff_cache/
+
+# LangGraph conversation memory (CHECKPOINTER=sqlite, default SQLITE_CHECKPOINT_PATH).
+# Not under data/: on case-insensitive filesystems that is the tracked DATA/ corpus folder.
+/state/

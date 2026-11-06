@@ -9,6 +9,8 @@ functions), so importing this module needs no API keys, network or heavy package
 
 import json
 import os
+import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,71 @@ def ensure_rails() -> None:
     _ensure_rails()
 
 
+# ── Shared steps of /query and /query/stream ─────────────────────────────────
+# Both entry points run exactly these helpers, so guardrails, state reset, thread
+# config and the response shape can't drift between streaming and non-streaming.
+
+
+def _check_guardrails(question: str, thread_id: str | None) -> dict[str, Any] | None:
+    """
+    Gate 1: NeMo Guardrails — blocks off-topic, jailbreaks, and handles dialog.
+    Returns the blocked-response dict, or None when the question may proceed.
+
+    Initialised here (not only at FastAPI startup) so every entry point is guarded.
+    If initialisation fails this raises, and the caller fails closed (error), never unguarded.
+    """
+    ensure_rails()
+    from app.guardrails import guard
+
+    rail_fired, rail_response = guard(question)
+    if not rail_fired:
+        return None
+    logfire.info(f"🛡️ Request blocked by guardrails | thread={thread_id}")
+    return {
+        "question": question,
+        "answer": rail_response,
+        "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
+        "status": "Blocked by guardrails.",
+        "sources": [],
+        "grounded": None,
+    }
+
+
+def _agent_inputs(question: str, thread_id: str | None, **configurable) -> tuple[dict, dict]:
+    """Initial state + run config for one question on one conversation thread."""
+    from app.agents.state import new_request_state
+
+    # Resets every per-request field (retrieval_attempts, grounded, documents, plan…)
+    # so values checkpointed for this thread don't leak into this run. Only `messages`
+    # carries over: that is the conversation memory.
+    initial_state = new_request_state(question)
+    # thread_id selects which checkpointed conversation this run continues.
+    config = {"configurable": {"thread_id": thread_id, **configurable}}
+    return initial_state, config
+
+
+def _result_from_state(question: str, final_output: dict) -> dict[str, Any]:
+    return {
+        "question": question,
+        "answer": final_output.get("final_answer"),
+        "thought_process": final_output.get("plan"),
+        "status": final_output.get("status"),
+        "sources": build_citations(final_output.get("documents", [])),
+        "grounded": final_output.get("grounded"),
+    }
+
+
+def _error_result(question: str) -> dict[str, Any]:
+    return {
+        "question": question,
+        "answer": INTERNAL_ERROR_ANSWER,
+        "thought_process": ["Error encountered during execution."],
+        "status": "error",
+        "sources": [],
+        "grounded": None,
+    }
+
+
 def answer_question(question: str, thread_id: str | None) -> dict[str, Any]:
     """
     Guardrails gate + self-correcting LangGraph agent.
@@ -39,56 +106,130 @@ def answer_question(question: str, thread_id: str | None) -> dict[str, Any]:
     sources, grounded. Never raises: pipeline errors become status="error".
     """
     from app.agents.graph import get_rag_agent
-    from app.agents.state import new_request_state
-
-    # Resets every per-request field (retrieval_attempts, grounded, documents, plan…)
-    # so values checkpointed by MemorySaver for this thread don't leak into this run.
-    initial_state = new_request_state(question)
-
-    # Configuration for Memory (Thread ID)
-    config = {"configurable": {"thread_id": thread_id}}
 
     try:
-        # Gate 1: NeMo Guardrails — blocks off-topic, jailbreaks, and handles dialog.
-        # Initialised here (not only at FastAPI startup) so every entry point is guarded.
-        # If initialisation fails the request fails closed (status="error"), never unguarded.
-        ensure_rails()
-        from app.guardrails import guard
-
-        rail_fired, rail_response = guard(question)
-        if rail_fired:
-            logfire.info(f"🛡️ Request blocked by guardrails | thread={thread_id}")
-            return {
-                "question": question,
-                "answer": rail_response,
-                "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
-                "status": "Blocked by guardrails.",
-                "sources": [],
-                "grounded": None,
-            }
+        blocked = _check_guardrails(question, thread_id)
+        if blocked is not None:
+            return blocked
 
         # Gate 2: LangGraph RAG pipeline
         # Run the graph synchronously to preserve Logfire context variables
+        initial_state, config = _agent_inputs(question, thread_id)
         final_output = get_rag_agent().invoke(initial_state, config=config)
-
-        return {
-            "question": question,
-            "answer": final_output.get("final_answer"),
-            "thought_process": final_output.get("plan"),
-            "status": final_output.get("status"),
-            "sources": build_citations(final_output.get("documents", [])),
-            "grounded": final_output.get("grounded"),
-        }
+        return _result_from_state(question, final_output)
     except Exception as e:
         logfire.error(f"❌ Backend Execution Failed: {e}")
-        return {
-            "question": question,
-            "answer": INTERNAL_ERROR_ANSWER,
-            "thought_process": ["Error encountered during execution."],
-            "status": "error",
-            "sources": [],
-            "grounded": None,
-        }
+        return _error_result(question)
+
+
+# ── Streaming ─────────────────────────────────────────────────────────────────
+
+# Server-Sent Event types emitted by stream_answer(), in order:
+#   step*    one per new plan entry as each graph node finishes
+#   token*   answer text chunks
+#   sources  final citations
+#   done     status, grounded, thought_process (+ the full answer)
+# or, instead of sources/done when something fails:
+#   error    friendly message, never a traceback
+STEP, TOKEN, SOURCES, DONE, ERROR = "step", "token", "sources", "done", "error"
+
+StreamEvent = tuple[str, dict[str, Any]]
+
+
+def _text_chunks(text: str) -> list[str]:
+    """Splits a ready-made reply into word-sized chunks so it renders like a streamed one."""
+    return re.findall(r"\S+\s*|\s+", text or "")
+
+
+def _steps_from_update(node: str, update: dict, previous_plan: list[str]) -> list[dict[str, Any]]:
+    """
+    Step events for one node's state update. Nodes return the whole plan list
+    (previous entries + new ones); only the new entries become events. The planner
+    starts a fresh list, which then is entirely new. A node that adds no plan entry
+    (e.g. a plain responder answer) still reports that it finished, with its status.
+    """
+    status = update.get("status")
+    plan = update.get("plan")
+    if plan is None:
+        new_entries = []
+    elif plan[: len(previous_plan)] == previous_plan:
+        new_entries = plan[len(previous_plan) :]
+    else:
+        new_entries = plan
+    if not new_entries:
+        return [{"node": node, "step": status or f"{node} finished", "status": status}]
+    return [{"node": node, "step": entry, "status": status} for entry in new_entries]
+
+
+def stream_answer(question: str, thread_id: str | None) -> Iterator[StreamEvent]:
+    """
+    Same guardrails + agent path as answer_question(), yielded as (event, data) pairs
+    while it runs. Never raises: a failure becomes one final `error` event.
+
+    stream_mode=["updates", "custom"]: "updates" yields each node's state update as the
+    node finishes (→ step events); "custom" yields what nodes push through LangGraph's
+    stream writer — here the responder's LLM tokens (→ token events).
+    """
+    from app.agents.graph import get_rag_agent
+    from app.agents.streaming import STREAM_TOKENS_KEY, TOKEN_ITEM
+
+    try:
+        blocked = _check_guardrails(question, thread_id)
+        if blocked is not None:
+            for chunk in _text_chunks(blocked["answer"]):
+                yield TOKEN, {"text": chunk}
+            yield DONE, _done_payload(blocked)
+            return
+
+        initial_state, config = _agent_inputs(question, thread_id, **{STREAM_TOKENS_KEY: True})
+        # Latest value of every field, rebuilt from the per-node updates (messages
+        # excluded: the response doesn't need them and the checkpointer stores them).
+        final_state = {key: value for key, value in initial_state.items() if key != "messages"}
+        streamed_tokens = False
+
+        for mode, chunk in get_rag_agent().stream(initial_state, config=config, stream_mode=["updates", "custom"]):
+            if mode == "custom":
+                if isinstance(chunk, dict) and chunk.get("type") == TOKEN_ITEM and chunk.get("text"):
+                    streamed_tokens = True
+                    yield TOKEN, {"text": chunk["text"]}
+                continue
+            for node, update in (chunk or {}).items():
+                if not isinstance(update, dict):
+                    continue
+                yield from ((STEP, step) for step in _steps_from_update(node, update, final_state.get("plan") or []))
+                final_state.update({key: value for key, value in update.items() if key != "messages"})
+
+        result = _result_from_state(question, final_state)
+        if not streamed_tokens:
+            # Answers written without an LLM call: "knowledge base unavailable"
+            # (retriever) and "not in the documents" (responder).
+            for text in _text_chunks(result["answer"]):
+                yield TOKEN, {"text": text}
+        yield SOURCES, {"sources": result["sources"]}
+        yield DONE, _done_payload(result)
+    except Exception as e:
+        logfire.error(f"❌ Streaming Execution Failed: {e}")
+        yield ERROR, {"message": INTERNAL_ERROR_ANSWER}
+
+
+def _done_payload(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": result["status"],
+        "grounded": result["grounded"],
+        "thought_process": result["thought_process"],
+        "answer": result["answer"],
+    }
+
+
+# ── Conversation memory ───────────────────────────────────────────────────────
+
+
+def reset_thread(thread_id: str) -> None:
+    """Deletes every checkpoint of `thread_id`: the next question starts a fresh conversation."""
+    from app.agents.checkpointer import get_checkpointer
+
+    get_checkpointer().delete_thread(thread_id)
+    logfire.info(f"🗑️ Conversation memory cleared | thread={thread_id}")
 
 
 def search_knowledge(query: str, top_k: int) -> list[dict[str, Any]]:

@@ -101,9 +101,15 @@ jobs:
           region: ${{ inputs.region }}
           image: ${{ steps.image.outputs.ref }}
           # Non-secret configuration.
+          # CHECKPOINTER: set the repository variable to "postgres" once DATABASE_URL is in
+          # Secret Manager (DOCS/12 section 8); otherwise memory is per-instance SQLite.
+          # TRUST_PROXY_HEADERS: requests arrive through Google's front end, so rate limits
+          # must key on the X-Forwarded-For entry it appends, not on the proxy's address.
           env_vars: |-
             QDRANT_COLLECTION=enterprise_rag_v2
             RETRIEVAL_MODE=hybrid
+            CHECKPOINTER=${{ vars.CHECKPOINTER || 'sqlite' }}
+            TRUST_PROXY_HEADERS=true
           env_vars_update_strategy: overwrite
           # Every key comes from Secret Manager (secret name = env var name, latest version).
           # The runtime service account needs roles/secretmanager.secretAccessor on each.
@@ -116,6 +122,7 @@ jobs:
             QDRANT_CLUSTER_ENDPOINT=QDRANT_CLUSTER_ENDPOINT:latest
             LOGFIRE_TOKEN=LOGFIRE_TOKEN:latest
             LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest
+            ${{ vars.CHECKPOINTER == 'postgres' && 'DATABASE_URL=DATABASE_URL:latest' || '' }}
           secrets_update_strategy: overwrite
           flags: >-
             --min-instances=0

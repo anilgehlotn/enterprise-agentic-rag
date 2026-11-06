@@ -488,9 +488,11 @@ The guard runs as **Gate 1** inside the `/query` endpoint, before LangGraph is e
 ```python
 # app/main.py
 
-@app.on_event("startup")
-def startup_event():
-    initialize_rails()   # builds the LLMRails singleton once at boot
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ...
+    rag_service.ensure_rails()   # builds the LLMRails singleton once at boot
+    yield
 
 @app.post("/query")
 def query(request: QueryRequest):

@@ -64,3 +64,6 @@ processed_data/
 .DS_Store
 Thumbs.db
 *.log
+
+# Local conversation memory (SQLite checkpointer) — never bake it into an image
+/state/

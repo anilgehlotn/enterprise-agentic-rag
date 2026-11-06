@@ -61,6 +61,36 @@ The project uses a `.env` file for local development. All configuration is manag
 
 ---
 
+## 💾 Conversation Memory (LangGraph checkpointer)
+
+The checkpointer stores the graph state per `thread_id` after every node, so a follow-up question on the same thread sees the earlier turns. Code: `app/agents/checkpointer.py`.
+
+| Variable | Description | Example |
+| :--- | :--- | :--- |
+| `CHECKPOINTER` | `sqlite` (default): local file, survives API restarts on one machine. `memory`: in-process only, lost on restart (tests use this). `postgres`: shared database, required for persistent memory on Cloud Run. Any other value fails at API startup. | `sqlite` |
+| `SQLITE_CHECKPOINT_PATH` | SQLite file for `CHECKPOINTER=sqlite`. The folder is created on startup and `/state/` is git- and docker-ignored. Default `./state/checkpoints.sqlite` (not `./data/`: on macOS/Windows that is the same folder as the `DATA/` corpus). | `./state/checkpoints.sqlite` |
+| `DATABASE_URL` | Postgres connection string for `CHECKPOINTER=postgres`. Tables are created on startup (`PostgresSaver.setup()`, idempotent). **A secret**: on Cloud Run it comes from Secret Manager. | `postgresql://user:pass@ep-x.neon.tech/rag?sslmode=require` |
+
+`POST /threads/{thread_id}/reset` deletes all checkpoints of one thread (the UI's **Clear History & Memory** button calls it).
+
+---
+
+## 🚦 Rate Limiting
+
+Per-client-IP limits on the endpoints that spend LLM / embedding budget. Code: `app/rate_limit.py`. Exceeding a limit returns **429** with a `Retry-After` header. `/health` (and `/`, `/graph`, `/threads/.../reset`) are never limited. Limits are validated at startup.
+
+| Variable | Description | Example |
+| :--- | :--- | :--- |
+| `RATE_LIMIT_QUERY` | Limit for `/query` and `/query/stream` together (one shared budget). Format `<count>/<second\|minute\|hour\|day>`. Default `20/minute`. | `20/minute` |
+| `RATE_LIMIT_UPLOAD` | Limit for `/documents`. Default `5/minute`. | `5/minute` |
+| `TRUST_PROXY_HEADERS` | `true`: identify clients by the **rightmost** `X-Forwarded-For` entry (the one our proxy wrote). `false` (default): use the TCP peer address and ignore the header, because any client can forge it to get a fresh budget per request. Set `true` only behind a proxy you control, e.g. Cloud Run. | `false` |
+
+> **uvicorn has its own proxy-header handling.** By default uvicorn rewrites the client address from `X-Forwarded-For` when the TCP peer is in `FORWARDED_ALLOW_IPS` (default `127.0.0.1`), independently of `TRUST_PROXY_HEADERS`. The Docker image runs uvicorn with `--no-proxy-headers` so the app's setting is the only switch. Locally this only matters for requests from your own machine; add `--no-proxy-headers` to your `uvicorn` command to reproduce production behaviour.
+
+> **Per instance.** The counters live in each process's memory. With Cloud Run `--max-instances=2`, one client can get at most 2× the configured limit, which is acceptable for this demo. Exact global limits across many instances need a shared store such as Redis.
+
+---
+
 ## 🖥️ Backend
 
 | Variable | Description | Example |

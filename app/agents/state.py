@@ -23,7 +23,7 @@ def new_request_state(question: str) -> dict:
     """
     Initial state for one /query call.
 
-    The MemorySaver checkpointer keeps the whole state per thread_id between
+    The checkpointer (app/agents/checkpointer.py) keeps the whole state per thread_id between
     requests. Only `messages` should carry over (it has a reducer, so this new
     message is appended). Every per-request field is reset here, otherwise
     e.g. retrieval_attempts=2 from the previous question would skip the rewrite

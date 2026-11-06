@@ -33,14 +33,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-from app.schemas import MAX_QUESTION_CHARS, SourceChunk
+from app.schemas import MAX_QUESTION_CHARS, MAX_THREAD_ID_CHARS, SourceChunk
 from app.services import rag_service
 from app.services.retrieval.schema import RetrievalError
 
 logger = logging.getLogger("app.mcp_server")
 
 MIN_TOP_K, MAX_TOP_K = 1, 20
-MAX_THREAD_ID_CHARS = 200
 DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 8001
 

@@ -1,5 +1,5 @@
+import json
 import os
-import time
 import uuid
 
 import logfire
@@ -85,6 +85,105 @@ def render_grounded_badge(grounded) -> None:
         getattr(st, kind)(label)
 
 
+RATE_LIMITED_MESSAGE = "⏳ You're sending requests faster than the service allows. Please wait a moment and try again."
+# Self-correction can add grading, a rewrite + second retrieval, and verification.
+QUERY_TIMEOUT_SECONDS = 120
+
+
+class RateLimitedError(Exception):
+    """The backend answered 429."""
+
+
+class StreamUnavailableError(Exception):
+    """/query/stream could not be used; the caller falls back to /query."""
+
+
+def iter_sse(lines):
+    """Parses Server-Sent Event lines into (event, data) pairs (data is JSON)."""
+    event, data_lines = "message", []
+    for line in lines:
+        if line is None:
+            continue
+        if line == "":
+            if data_lines:
+                yield event, json.loads("\n".join(data_lines))
+            event, data_lines = "message", []
+        elif line.startswith("event:"):
+            event = line[len("event:") :].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[len("data:") :].strip())
+
+
+def stream_query(payload: dict, status, answer_placeholder) -> dict:
+    """
+    Calls /query/stream: shows step events in the status panel and tokens in the
+    answer placeholder as they arrive. Returns a /query-shaped dict.
+    Raises RateLimitedError on 429 and StreamUnavailableError when nothing was received.
+    """
+    data = {"answer": "", "sources": [], "thought_process": [], "grounded": None, "status": ""}
+    received_any = False
+    try:
+        with requests.post(
+            f"{_backend_url()}/query/stream", json=payload, stream=True, timeout=QUERY_TIMEOUT_SECONDS
+        ) as response:
+            if response.status_code == 429:
+                raise RateLimitedError()
+            if response.status_code != 200:
+                raise StreamUnavailableError(f"HTTP {response.status_code}")
+            for event, body in iter_sse(response.iter_lines(decode_unicode=True)):
+                received_any = True
+                if event == "step":
+                    status.write(f"⚙️ {body.get('step')}")
+                elif event == "token":
+                    data["answer"] += body.get("text", "")
+                    answer_placeholder.markdown(data["answer"] + "▌")
+                elif event == "sources":
+                    data["sources"] = body.get("sources") or []
+                elif event == "done":
+                    data.update({k: body.get(k) for k in ("status", "grounded", "thought_process")})
+                    data["answer"] = body.get("answer") or data["answer"]
+                    return data
+                elif event == "error":
+                    data.update(answer=body.get("message", "Something went wrong."), status="error")
+                    return data
+    except (requests.RequestException, ValueError) as exc:  # ValueError: malformed JSON
+        if not received_any:
+            raise StreamUnavailableError(str(exc)) from exc
+        logfire.error(f"Stream interrupted: {exc}")
+    if not received_any:
+        raise StreamUnavailableError("empty stream")
+    # Interrupted after part of the answer arrived. Retrying via /query would run the
+    # question a second time, so keep what we have.
+    data["status"] = "error"
+    data["answer"] += "\n\n_⚠️ The connection was interrupted before the answer finished._"
+    return data
+
+
+def post_query(payload: dict) -> dict:
+    """Non-streaming fallback: POST /query."""
+    response = requests.post(f"{_backend_url()}/query", json=payload, timeout=QUERY_TIMEOUT_SECONDS)
+    if response.status_code == 429:
+        raise RateLimitedError()
+    response.raise_for_status()
+    return response.json()
+
+
+def render_sources(sources) -> None:
+    if not sources:
+        return
+    with st.expander("📄 View Retrieved Context (Sources)"):
+        for i, source in enumerate(sources):
+            source_name = source.get("source", "Unknown source")
+            score = source.get("rerank_score")
+            if score is None:
+                score = source.get("retrieval_score")
+            score_label = f" | relevance: {score:.3f}" if isinstance(score, float) else ""
+            # [n] matches the inline citations in the answer.
+            with st.expander(f"[{i + 1}] {source_name}{score_label}"):
+                st.caption(f"Type: {source.get('source_type', 'unknown')}")
+                st.info(source.get("content", ""))
+
+
 @st.dialog("Upload and attach files", width="large")
 def upload_documents_dialog():
     st.caption("Add knowledge sources to the workspace. Files are indexed with source metadata for traceable answers.")
@@ -126,6 +225,9 @@ def upload_documents_dialog():
             st.success(f"{len(indexed)} document{'s' if len(indexed) != 1 else ''} added to the knowledge workspace.")
         except requests.HTTPError as exc:
             progress.empty()
+            if exc.response is not None and exc.response.status_code == 429:
+                st.warning("⏳ Too many uploads in a short time. Please wait a minute and try again.")
+                return
             try:
                 detail = exc.response.json().get("detail", str(exc))
             except ValueError:
@@ -148,6 +250,13 @@ with st.sidebar:
 
     if st.button("🗑️ Clear History & Memory", width="stretch", type="primary"):
         logfire.warn(f"🗑️ Memory Wipe Triggered for session: {st.session_state.session_id}")
+        # Delete the server-side conversation memory, not just the chat on screen.
+        try:
+            reset_url = f"{_backend_url()}/threads/{st.session_state.session_id}/reset"
+            requests.post(reset_url, timeout=15).raise_for_status()
+        except requests.RequestException as exc:
+            # The new session id below still starts a fresh conversation.
+            logfire.error(f"Server-side memory reset failed: {exc}")
         st.session_state.messages = []
         st.session_state.session_id = str(uuid.uuid4())
         st.rerun()
@@ -187,57 +296,41 @@ if prompt := st.chat_input("Ask a question about your knowledge sources…"):
 
         # Assistant Response
         with st.chat_message("assistant", avatar=AI_AVATAR):
-            with st.status("🔍 Agent is thinking...", expanded=True) as status:
-                try:
-                    # DISTRIBUTED TRACE: Calling Backend
-                    with logfire.span("📡 Calling RAG Backend"):
-                        # Get backend URL from env, or default to local if not set
-                        url = f"{_backend_url()}/query"
-                        payload = {"q": prompt, "thread_id": st.session_state.session_id}
-                        # Self-correction can add grading, a rewrite + second retrieval, and verification.
-                        response = requests.post(url, json=payload, timeout=120)
-                        data = response.json()
-
-                    # Show Reasoning Steps from Backend (intent, each retrieval attempt,
-                    # grading result, query rewrite, verification)
-                    steps = data.get("thought_process") or []
-                    for step in steps:
-                        st.write(f"⚙️ {step}")
-
-                    status.update(label="✅ Answer Synthesized", state="complete", expanded=False)
-
-                    # --- SHOW SOURCES (NESTED EXPANDABLES) ---
-                    sources = data.get("sources", [])
-                    if sources:
-                        with st.expander("📄 View Retrieved Context (Sources)"):
-                            for i, source in enumerate(sources):
-                                source_name = source.get("source", "Unknown source")
-                                content = source.get("content", "")
-                                score = source.get("rerank_score")
-                                if score is None:
-                                    score = source.get("retrieval_score")
-                                score_label = f" | relevance: {score:.3f}" if isinstance(score, float) else ""
-                                # [n] matches the inline citations in the answer.
-                                with st.expander(f"[{i + 1}] {source_name}{score_label}"):
-                                    st.caption(f"Type: {source.get('source_type', 'unknown')}")
-                                    st.info(content)
-                except Exception as e:
-                    logfire.error(f"❌ UI-Backend Connection Failed: {e}")
-                    status.update(label="❌ Connection Failed", state="error")
-                    st.error("Backend Offline.")
-                    st.stop()
-
-            # Final Answer Streaming
+            payload = {"q": prompt, "thread_id": st.session_state.session_id}
+            status = st.status("🔍 Agent is thinking...", expanded=True)
+            # Created after the status panel, so tokens render below the live steps.
             answer_placeholder = st.empty()
-            full_answer = data.get("answer", "No response.")
+            try:
+                # DISTRIBUTED TRACE: Calling Backend
+                with logfire.span("📡 Calling RAG Backend (stream)"):
+                    try:
+                        data = stream_query(payload, status, answer_placeholder)
+                    except StreamUnavailableError as exc:
+                        logfire.warning(f"Streaming unavailable ({exc}); falling back to /query")
+                        data = post_query(payload)
+                        # Reasoning steps from the backend (intent, each retrieval attempt,
+                        # grading result, query rewrite, verification)
+                        for step in data.get("thought_process") or []:
+                            status.write(f"⚙️ {step}")
+            except RateLimitedError:
+                status.update(label="⏳ Rate limited", state="error", expanded=False)
+                st.warning(RATE_LIMITED_MESSAGE)
+                st.stop()
+            except Exception as e:
+                logfire.error(f"❌ UI-Backend Connection Failed: {e}")
+                status.update(label="❌ Connection Failed", state="error")
+                st.error("Backend Offline.")
+                st.stop()
 
-            curr_text = ""
-            for char in full_answer:
-                curr_text += char
-                answer_placeholder.markdown(curr_text + "▌")
-                time.sleep(0.005)
-
+            failed = data.get("status") == "error"
+            status.update(
+                label="❌ Something went wrong" if failed else "✅ Answer Synthesized",
+                state="error" if failed else "complete",
+                expanded=False,
+            )
+            full_answer = data.get("answer") or "No response."
             answer_placeholder.markdown(full_answer)
+            render_sources(data.get("sources", []))
             grounded = data.get("grounded")
             render_grounded_badge(grounded)
             st.session_state.messages.append({"role": "assistant", "content": full_answer, "grounded": grounded})

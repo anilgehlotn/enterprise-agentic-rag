@@ -102,5 +102,9 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8080') + '/health', timeout=4)" || exit 1
 
-# Cloud Run injects $PORT. `exec` makes uvicorn PID 1 so it receives SIGTERM directly.
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Cloud Run injects $PORT. `exec` makes uvicorn PID 1 so it receives SIGTERM directly
+# (and runs the FastAPI lifespan shutdown, which closes the checkpointer connection).
+# --no-proxy-headers: uvicorn would otherwise rewrite the client address from
+# X-Forwarded-For whenever the peer is in FORWARDED_ALLOW_IPS (default 127.0.0.1), behind
+# the app's back. The app decides that itself via TRUST_PROXY_HEADERS (app/rate_limit.py).
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --no-proxy-headers"]
