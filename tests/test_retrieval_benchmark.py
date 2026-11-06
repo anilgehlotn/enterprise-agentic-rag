@@ -2,8 +2,8 @@
 
 import pytest
 
-from evals import retrieval_benchmark as bench
 from app.services.retrieval.schema import RetrievalError
+from evals import retrieval_benchmark as bench
 
 GOLDEN = "spec: parallelism: 2 template: metadata: name: job-wq-2"
 SAMPLES = [
@@ -33,8 +33,9 @@ def fake_rerank(query, records, top_n):
 
 
 def test_run_benchmark_scores_all_four_configurations():
-    results, per_question = bench.run_benchmark(SAMPLES, k=5, candidates=15, delay=0,
-                                                search=fake_search, rerank=fake_rerank)
+    results, per_question = bench.run_benchmark(
+        SAMPLES, k=5, candidates=15, delay=0, search=fake_search, rerank=fake_rerank
+    )
 
     summary = {key: result.summary(5) for key, result in results.items()}
     assert summary["dense"]["hit_rate"] == 0.5
@@ -42,15 +43,26 @@ def test_run_benchmark_scores_all_four_configurations():
     assert summary["dense_rerank"]["mrr"] == pytest.approx((1 + 0) / 2)
     assert summary["hybrid"]["mrr"] == pytest.approx((1 + 0) / 2)
     assert summary["dense"]["noise_rate"] == pytest.approx(6 / 7)
-    assert per_question[0] == {"id": 1, "question": "parallelism?", "dense": 4, "dense_rerank": 1,
-                               "hybrid": 1, "hybrid_rerank": 1}
+    assert per_question[0] == {
+        "id": 1,
+        "question": "parallelism?",
+        "dense": 4,
+        "dense_rerank": 1,
+        "hybrid": 1,
+        "hybrid_rerank": 1,
+    }
     assert per_question[1]["hybrid"] is None
 
 
 def test_report_contains_table_and_metadata():
     results, per_question = bench.run_benchmark(SAMPLES, delay=0, search=fake_search, rerank=fake_rerank)
-    meta = {"date": "2026-11-06 10:00 UTC", "collection": "enterprise_rag", "points": 80,
-            "dense_model": "models/gemini-embedding-2-preview", "sparse_model": "Qdrant/bm25"}
+    meta = {
+        "date": "2026-11-06 10:00 UTC",
+        "collection": "enterprise_rag",
+        "points": 80,
+        "dense_model": "models/gemini-embedding-2-preview",
+        "sparse_model": "Qdrant/bm25",
+    }
 
     report = bench.render_report(results, per_question, meta, k=5, candidates=15, n_questions=2)
 

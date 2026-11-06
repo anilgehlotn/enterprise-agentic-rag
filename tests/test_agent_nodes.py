@@ -40,6 +40,7 @@ def _technical_state(question="How do CronJobs work?", **extra):
 
 # ── grader ────────────────────────────────────────────────────────────────────
 
+
 def test_grader_keeps_only_relevant_chunks_in_one_batched_call(monkeypatch):
     llm = _use_llm(monkeypatch, grader, FakeLLM('{"relevant": [0, 2]}'))
 
@@ -47,7 +48,7 @@ def test_grader_keeps_only_relevant_chunks_in_one_batched_call(monkeypatch):
 
     assert update["documents"] == [DOCS[0], DOCS[2]]
     assert update["plan"][-1] == "Grading (attempt 1): 2/3 chunks relevant"
-    assert len(llm.prompts) == 1                         # batched, not one call per chunk
+    assert len(llm.prompts) == 1  # batched, not one call per chunk
     assert all(f"[{i}]" in llm.prompts[0] for i in range(3))
     assert "How do CronJobs work?" in llm.prompts[0]
 
@@ -82,6 +83,7 @@ def test_grader_skips_llm_when_nothing_was_retrieved(monkeypatch):
 
 # ── rewriter ──────────────────────────────────────────────────────────────────
 
+
 def test_rewriter_sets_new_query_and_logs_the_step(monkeypatch):
     llm = _use_llm(monkeypatch, rewriter, FakeLLM("Kubernetes CronJob schedule syntax"))
 
@@ -103,6 +105,7 @@ def test_rewriter_falls_back_to_original_question(monkeypatch, llm):
 
 
 # ── verifier ──────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     "reply, grounded, step",
@@ -132,6 +135,7 @@ def test_verifier_error_is_inconclusive(monkeypatch):
 
 
 # ── responder ─────────────────────────────────────────────────────────────────
+
 
 def test_responder_with_no_documents_refuses_without_calling_the_llm(monkeypatch):
     def explode():
@@ -163,6 +167,7 @@ def test_responder_prompt_numbers_sources_and_requires_inline_citations():
 
 
 # ── retriever ─────────────────────────────────────────────────────────────────
+
 
 def test_retriever_increments_attempts_and_logs_the_step(monkeypatch):
     searched = []

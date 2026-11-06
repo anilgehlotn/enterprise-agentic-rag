@@ -1,5 +1,7 @@
 # Enterprise Agentic RAG
 
+[![CI](https://github.com/anilgehlotn/enterprise-agentic-rag/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/anilgehlotn/enterprise-agentic-rag/actions/workflows/ci.yml)
+
 An evidence-first AI assistant for technical document intelligence. It ingests mixed enterprise documents, retrieves and reranks the most relevant evidence, applies safety guardrails, and delivers source-attributed answers through a FastAPI service and Streamlit interface.
 
 > **Live demo:** [Open Enterprise Agentic RAG](https://anil-enterprise-rag.streamlit.app/)

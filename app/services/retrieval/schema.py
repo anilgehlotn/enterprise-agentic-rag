@@ -7,8 +7,8 @@ the MCP server import it at module level, so it must stay cheap to import.
 import os
 
 # ── Collection schema (one collection, two named vectors) ─────────────────────
-DENSE_VECTOR = "dense"      # Gemini embedding, cosine distance
-SPARSE_VECTOR = "bm25"      # fastembed Qdrant/bm25 term weights; Qdrant applies IDF (Modifier.IDF)
+DENSE_VECTOR = "dense"  # Gemini embedding, cosine distance
+SPARSE_VECTOR = "bm25"  # fastembed Qdrant/bm25 term weights; Qdrant applies IDF (Modifier.IDF)
 BM25_MODEL = "Qdrant/bm25"
 
 REINGEST_COMMAND = "python -m app.ingestion.processor DATA --wipe"
@@ -16,8 +16,8 @@ OLD_SCHEMA_MESSAGE = f"Collection uses the old schema — re-ingest with: {REING
 
 # ── Retrieval modes ────────────────────────────────────────────────────────────
 RETRIEVAL_MODE_ENV = "RETRIEVAL_MODE"
-HYBRID = "hybrid"           # dense + BM25 prefetch, fused with Qdrant's native RRF
-DENSE = "dense"             # dense vector only
+HYBRID = "hybrid"  # dense + BM25 prefetch, fused with Qdrant's native RRF
+DENSE = "dense"  # dense vector only
 RETRIEVAL_MODES = (HYBRID, DENSE)
 DEFAULT_RETRIEVAL_MODE = HYBRID
 
@@ -53,7 +53,5 @@ def resolve_retrieval_mode(value: str | None = None) -> str:
         value = os.getenv(RETRIEVAL_MODE_ENV) or DEFAULT_RETRIEVAL_MODE
     mode = value.strip().lower()
     if mode not in RETRIEVAL_MODES:
-        raise ValueError(
-            f"Invalid {RETRIEVAL_MODE_ENV}={value!r}: expected one of {', '.join(RETRIEVAL_MODES)}."
-        )
+        raise ValueError(f"Invalid {RETRIEVAL_MODE_ENV}={value!r}: expected one of {', '.join(RETRIEVAL_MODES)}.")
     return mode

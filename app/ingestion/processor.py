@@ -5,20 +5,20 @@ upload endpoint. Importing this module has no side effects: no Logfire configura
 no Qdrant client and no embedding model are created until a file is processed.
 """
 
+import json
 import os
 import sys
 import uuid
-import json
-import logfire
 
+import logfire
 from qdrant_client.http import models
 
 from app.config import settings
+from app.ingestion.chunking.splitter import chunk_text
 from app.services.retrieval.embedding import embed_texts
 from app.services.retrieval.qdrant_service import delete_collection, ensure_collection, get_qdrant_client
 from app.services.retrieval.schema import DENSE_VECTOR, SPARSE_VECTOR, CollectionSchemaError
 from app.services.retrieval.sparse_embedding import embed_sparse_documents
-from app.ingestion.chunking.splitter import chunk_text
 
 # Local folder where parsed + chunked JSON metadata is saved (replaces GCS processed bucket)
 PROCESSED_DATA_DIR = "processed_data"
@@ -49,7 +49,7 @@ def build_points(chunks: list[str], filename: str, source_type: str) -> list[mod
             vector={DENSE_VECTOR: dense, SPARSE_VECTOR: sparse},
             payload={"text": chunk, "source": filename, "source_type": source_type},
         )
-        for chunk, dense, sparse in zip(chunks, dense_vectors, sparse_vectors)
+        for chunk, dense, sparse in zip(chunks, dense_vectors, sparse_vectors, strict=False)
     ]
 
 
@@ -61,15 +61,19 @@ def process_file(file_path: str, filename: str, source_type: str):
             ext = filename.lower().rsplit(".", 1)[-1]
             if ext == "pdf":
                 from app.ingestion.loaders.pdf import parse_pdf
+
                 full_text = parse_pdf(file_path)
             elif ext in ("html", "htm"):
                 from app.ingestion.loaders.html import parse_html
+
                 full_text = parse_html(file_path)
             elif ext == "txt":
                 from app.ingestion.loaders.text import parse_text
+
                 full_text = parse_text(file_path)
             elif ext in ("docx", "pptx"):
                 from app.ingestion.loaders.office import parse_office
+
                 full_text = parse_office(file_path)
             else:
                 logfire.warning(f"Skipping unsupported file type: {filename}")
@@ -127,7 +131,6 @@ def run_universal_ingestion(base_dir: str, explicit_source_type: str = None, wip
     Pass --wipe to drop and recreate the Qdrant collection before ingestion.
     """
     with logfire.span("Universal Ingestion Started", base_directory=base_dir):
-
         # Wipe collection if requested
         if wipe:
             with logfire.span("Wiping Collection"):
@@ -138,30 +141,19 @@ def run_universal_ingestion(base_dir: str, explicit_source_type: str = None, wip
         ensure_collection()
 
         # Route to sub-folders or treat the whole dir as one source
-        subdirs = [
-            d for d in os.listdir(base_dir)
-            if os.path.isdir(os.path.join(base_dir, d))
-        ]
+        subdirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
 
         if not subdirs:
             if explicit_source_type:
                 source_type = explicit_source_type
             else:
                 base_name = os.path.basename(os.path.normpath(base_dir)).lower()
-                source_type = (
-                    "true" if "true" in base_name
-                    else "noisy" if "noisy" in base_name
-                    else "general"
-                )
+                source_type = "true" if "true" in base_name else "noisy" if "noisy" in base_name else "general"
             logfire.info(f"No sub-folders found — processing '{base_dir}' as '{source_type}'.")
             process_directory(base_dir, source_type)
         else:
             for subdir in subdirs:
-                source_type = (
-                    "true" if "true" in subdir.lower()
-                    else "noisy" if "noisy" in subdir.lower()
-                    else subdir
-                )
+                source_type = "true" if "true" in subdir.lower() else "noisy" if "noisy" in subdir.lower() else subdir
                 process_directory(os.path.join(base_dir, subdir), source_type)
 
 

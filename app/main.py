@@ -2,26 +2,28 @@
 # CRITICAL: logfire MUST be configured before ALL other imports
 # so that spans from all modules are captured from the start.
 # ============================================================
-import logfire
 import os
 import tempfile
 from pathlib import Path
+
+import logfire
 from dotenv import load_dotenv
 
 load_dotenv()
-logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
+# "if-token-present": with LOGFIRE_TOKEN set, traces go to Logfire exactly as before.
+# Without it, telemetry is skipped instead of crashing at import ("not logged into
+# Logfire"), so the container can start and serve /health without any secrets.
+logfire.configure(token=os.getenv("LOGFIRE_TOKEN"), send_to_logfire="if-token-present")
 
 # Now safe to import app modules - logfire is already active
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from pydantic import BaseModel, Field
+
 from app.agents.graph import get_rag_agent
 from app.ingestion.processor import process_file
 from app.schemas import MAX_QUESTION_CHARS, QueryResponse
 from app.services import rag_service
 from app.services.retrieval.schema import resolve_retrieval_mode
-
-from pydantic import BaseModel, Field
-from typing import Optional
-
 
 # Initialize FastAPI
 app = FastAPI(title="Enterprise Agentic RAG API")
@@ -35,9 +37,10 @@ def startup_event():
     # idempotent, so every entry point (API and MCP server) is guarded either way.
     rag_service.ensure_rails()
 
+
 class QueryRequest(BaseModel):
     q: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS, description="The user's question")
-    thread_id: Optional[str] = "default_user"
+    thread_id: str | None = "default_user"
 
 
 class UploadResult(BaseModel):
@@ -48,8 +51,8 @@ class UploadResult(BaseModel):
 
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".html", ".htm", ".txt", ".docx", ".pptx"}
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-    
-    
+
+
 @app.get("/")
 def home():
     return {"message": "Enterprise LangGraph RAG API is live."}
@@ -113,8 +116,8 @@ async def upload_documents(files: list[UploadFile] = File(...)):
             Path(temporary_path).unlink(missing_ok=True)
 
     return uploaded
-    
-    
+
+
 @app.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest):
     """

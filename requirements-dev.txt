@@ -1,4 +1,7 @@
 pytest==8.3.5
+pytest-cov==7.1.0
+# Lint + format (config in pyproject.toml). Pinned so local and CI results match.
+ruff==0.17.4
 # Imported by code under test (app/schemas.py, evals/pipeline.py, app/agents/graph.py,
 # app/mcp_server.py, app/main.py); pinned to match requirements-prod.txt
 pydantic==2.13.4

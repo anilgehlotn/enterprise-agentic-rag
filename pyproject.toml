@@ -1,0 +1,46 @@
+[project]
+name = "enterprise-agentic-rag"
+version = "0.1.0"
+description = "Enterprise Agentic RAG: FastAPI + LangGraph + Qdrant hybrid retrieval"
+requires-python = ">=3.11"
+
+# ── Ruff (lint + format) ──────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+# *.md: ruff also formats ```python blocks inside Markdown; docs snippets are left as written.
+extend-exclude = ["notebooks", "DATA", "*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports, undefined names)
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency markers are meant to be called in argument defaults.
+extend-immutable-calls = ["fastapi.File", "fastapi.Depends", "fastapi.Query", "fastapi.Form"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "evals", "ui"]
+
+[tool.ruff.lint.per-file-ignores]
+# app/main.py must configure logfire before importing app modules (spans from import time).
+"app/main.py" = ["E402"]
+# Streamlit eval dashboard: sys.path insert + logfire.configure() must run before its imports.
+"evals/app.py" = ["E402"]
+
+# ── Pytest / coverage ─────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = false
+
+[tool.coverage.report]
+show_missing = false
+skip_covered = false

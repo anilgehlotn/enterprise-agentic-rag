@@ -46,6 +46,7 @@ def get_qdrant_client() -> QdrantClient:
 
 # ── Collection schema ─────────────────────────────────────────────────────────
 
+
 def collection_schema(dim: int) -> dict:
     """create_collection() arguments for the named dense + BM25 sparse layout."""
     return {
@@ -115,6 +116,7 @@ def _verify_schema_once(client: QdrantClient, name: str) -> None:
 
 
 # ── Search ────────────────────────────────────────────────────────────────────
+
 
 def build_query_request(dense_vector, sparse_vector, mode: str, limit: int) -> dict:
     """query_points() keyword arguments (without collection_name) for the given mode."""

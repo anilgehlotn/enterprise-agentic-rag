@@ -20,8 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Same answer the API has always returned when the pipeline raises.
 INTERNAL_ERROR_ANSWER = (
-    "I apologize, but I encountered an internal error while processing your request. "
-    "Please try again later."
+    "I apologize, but I encountered an internal error while processing your request. Please try again later."
 )
 
 

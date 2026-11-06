@@ -3,7 +3,7 @@ import sys
 import pytest
 
 from evals import pipeline
-from evals.pipeline import extract_context_texts, run_pipeline
+from evals.pipeline import detect_tool, extract_context_texts, run_pipeline
 
 
 def _api_sources():
@@ -88,23 +88,35 @@ def test_run_pipeline_handles_no_sources(monkeypatch, sources):
 
 # ── detect_tool with the self-correcting agent's thought_process ─────────────
 
-from evals.pipeline import detect_tool
-
 
 @pytest.mark.parametrize(
     "thought_process, expected",
     [
         # happy path
-        (["Intent: Technical", "Search Term: cronjob", "Retrieval attempt 1/2: 5 chunks retrieved for 'cronjob'",
-          "Grading (attempt 1): 3/5 chunks relevant", "Verification: answer supported by sources ✅"],
-         "retrieve_documents"),
+        (
+            [
+                "Intent: Technical",
+                "Search Term: cronjob",
+                "Retrieval attempt 1/2: 5 chunks retrieved for 'cronjob'",
+                "Grading (attempt 1): 3/5 chunks relevant",
+                "Verification: answer supported by sources ✅",
+            ],
+            "retrieve_documents",
+        ),
         # corrective path whose rewritten query mentions "memory"
-        (["Intent: Technical", "Search Term: pod limits", "Retrieval attempt 1/2: 5 chunks retrieved for 'pod limits'",
-          "Grading (attempt 1): 0/5 chunks relevant",
-          "Query rewrite: 'pod limits' → 'kubernetes container memory limits'",
-          "Retrieval attempt 2/2: 5 chunks retrieved for 'kubernetes container memory limits'",
-          "Grading (attempt 2): 0/5 chunks relevant", "Answer: indexed documents don't cover this question"],
-         "retrieve_documents"),
+        (
+            [
+                "Intent: Technical",
+                "Search Term: pod limits",
+                "Retrieval attempt 1/2: 5 chunks retrieved for 'pod limits'",
+                "Grading (attempt 1): 0/5 chunks relevant",
+                "Query rewrite: 'pod limits' → 'kubernetes container memory limits'",
+                "Retrieval attempt 2/2: 5 chunks retrieved for 'kubernetes container memory limits'",
+                "Grading (attempt 2): 0/5 chunks relevant",
+                "Answer: indexed documents don't cover this question",
+            ],
+            "retrieve_documents",
+        ),
         # retrieval steps alone are enough
         (["Retrieval attempt 1/2: 0 chunks retrieved for 'x'"], "retrieve_documents"),
         # conversational (+ cache hit)

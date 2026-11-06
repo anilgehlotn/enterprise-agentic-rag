@@ -95,7 +95,7 @@ define bot express farewell
 define flow farewell
   user express farewell
   bot express farewell
-"""
+"""  # noqa: E501 -- Colang bot messages are returned verbatim to users; wrapping changes them
 
 YAML_CONTENT = """
 models:
@@ -123,4 +123,3 @@ RAIL_INDICATORS = [
     "Goodbye! Feel free to return whenever you have more enterprise IT questions",
     "I'm an Enterprise AI Assistant with deep expertise in",
 ]
-

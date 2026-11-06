@@ -14,7 +14,10 @@ def _resolved_collection(value: str) -> str:
     env = {**os.environ, "PYTHONPATH": str(ROOT), "QDRANT_COLLECTION": value}
     result = subprocess.run(
         [sys.executable, "-c", "from app.config import settings; print(settings.QDRANT_COLLECTION)"],
-        cwd=ROOT, env=env, capture_output=True, text=True,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()

@@ -49,7 +49,7 @@ def normalize(text: str | None) -> str:
 def word_bigrams(text: str | None) -> set[tuple[str, str]]:
     """Distinct pairs of consecutive word tokens of the normalised text."""
     words = _TOKEN.findall(normalize(text))
-    return set(zip(words, words[1:]))
+    return set(zip(words, words[1:], strict=False))
 
 
 def token_overlap(chunk: str | None, golden: str | None) -> float:

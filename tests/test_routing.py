@@ -20,6 +20,7 @@ def test_retry_budget_is_two_attempts():
 
 # ── extract_json_object ───────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "raw, expected",
     [
@@ -41,15 +42,16 @@ def test_extract_json_object_returns_none_without_an_object(raw):
 
 # ── parse_relevance_grades ────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "raw, expected",
     [
         ('{"relevant": [0, 2]}', [0, 2]),
-        ('{"relevant": [2, 0, 2]}', [0, 2]),                                      # sorted, de-duplicated
-        ('{"relevant": []}', []),                                                  # explicit "none relevant"
-        ('{"relevant": ["1", 3]}', [1, 3]),                                        # numeric strings accepted
-        ('The relevant chunks are below.\n{"relevant": [4]}\nThanks!', [4]),       # wrapped in prose
-        ('```json\n{"relevant": [0, 1]}\n```', [0, 1]),                           # fenced
+        ('{"relevant": [2, 0, 2]}', [0, 2]),  # sorted, de-duplicated
+        ('{"relevant": []}', []),  # explicit "none relevant"
+        ('{"relevant": ["1", 3]}', [1, 3]),  # numeric strings accepted
+        ('The relevant chunks are below.\n{"relevant": [4]}\nThanks!', [4]),  # wrapped in prose
+        ('```json\n{"relevant": [0, 1]}\n```', [0, 1]),  # fenced
     ],
 )
 def test_parse_relevance_grades_valid(raw, expected):
@@ -67,12 +69,12 @@ def test_parse_relevance_grades_ignores_out_of_range_and_junk_entries():
     [
         None,
         "",
-        "Chunks 0 and 2 are relevant.",       # prose, no JSON
-        '{"relevant": [0, 2',                  # truncated JSON
-        '{"chunks": [0]}',                     # wrong key
-        '{"relevant": "0, 2"}',                # not a list
-        '{"relevant": [5, 7]}',                # non-empty but every index out of range
-        '{"relevant": [true]}',                # bool is not an index
+        "Chunks 0 and 2 are relevant.",  # prose, no JSON
+        '{"relevant": [0, 2',  # truncated JSON
+        '{"chunks": [0]}',  # wrong key
+        '{"relevant": "0, 2"}',  # not a list
+        '{"relevant": [5, 7]}',  # non-empty but every index out of range
+        '{"relevant": [true]}',  # bool is not an index
     ],
 )
 def test_parse_relevance_grades_unreadable_returns_none_to_fail_open(raw):
@@ -80,6 +82,7 @@ def test_parse_relevance_grades_unreadable_returns_none_to_fail_open(raw):
 
 
 # ── route_after_grader ────────────────────────────────────────────────────────
+
 
 def test_route_after_grader_answers_when_relevant_docs_remain():
     assert route_after_grader({"documents": [{"content": "x"}], "retrieval_attempts": 1}) == routing.RESPONDER
@@ -124,10 +127,10 @@ def test_choose_rewritten_query_cleans_the_rewrite(raw, expected):
         None,
         "",
         '""',
-        "job retries",            # identical to the failed query
-        "  JOB   Retries. ",      # identical ignoring case/whitespace/quotes
+        "job retries",  # identical to the failed query
+        "  JOB   Retries. ",  # identical ignoring case/whitespace/quotes
         '"job retries"',
-        "CONVERSATIONAL",         # must never turn the search into the routing sentinel
+        "CONVERSATIONAL",  # must never turn the search into the routing sentinel
     ],
 )
 def test_choose_rewritten_query_falls_back_to_original_question(raw):
@@ -137,6 +140,7 @@ def test_choose_rewritten_query_falls_back_to_original_question(raw):
 
 
 # ── route_after_responder ─────────────────────────────────────────────────────
+
 
 def test_route_after_responder_verifies_technical_answers_with_evidence():
     state = {"current_query": "job backoffLimit", "documents": [{"content": "x"}]}
@@ -149,7 +153,7 @@ def test_route_after_responder_verifies_technical_answers_with_evidence():
     [
         {"current_query": "CONVERSATIONAL", "documents": []},
         {"current_query": "CONVERSATIONAL", "documents": [{"content": "stale"}]},
-        {"current_query": "job backoffLimit", "documents": []},   # "not in the documents" answer
+        {"current_query": "job backoffLimit", "documents": []},  # "not in the documents" answer
         {"current_query": "job backoffLimit"},
     ],
 )
@@ -158,6 +162,7 @@ def test_route_after_responder_skips_verifier(state):
 
 
 # ── parse_groundedness ────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     "raw",

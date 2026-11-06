@@ -13,18 +13,26 @@ SPARSE = models.SparseVector(indices=[7, 42], values=[1.0, 1.0])
 
 
 def _new_schema_info(modifier=models.Modifier.IDF):
-    return SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(
-        vectors={"dense": models.VectorParams(size=3, distance=models.Distance.COSINE)},
-        sparse_vectors={"bm25": models.SparseVectorParams(modifier=modifier)},
-    )))
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            params=SimpleNamespace(
+                vectors={"dense": models.VectorParams(size=3, distance=models.Distance.COSINE)},
+                sparse_vectors={"bm25": models.SparseVectorParams(modifier=modifier)},
+            )
+        )
+    )
 
 
 def _old_schema_info():
     # What get_collection() returns for a collection created with an unnamed vector.
-    return SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(
-        vectors=models.VectorParams(size=3, distance=models.Distance.COSINE),
-        sparse_vectors=None,
-    )))
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            params=SimpleNamespace(
+                vectors=models.VectorParams(size=3, distance=models.Distance.COSINE),
+                sparse_vectors=None,
+            )
+        )
+    )
 
 
 class FakeClient:
@@ -50,8 +58,9 @@ class FakeClient:
         self.queries.append(kwargs)
         if self.query_error:
             raise self.query_error
-        point = SimpleNamespace(score=0.5, payload={"text": "backoffLimit: 4", "source": "jobs.html",
-                                                     "source_type": "true"})
+        point = SimpleNamespace(
+            score=0.5, payload={"text": "backoffLimit: 4", "source": "jobs.html", "source_type": "true"}
+        )
         return SimpleNamespace(points=[point])
 
 
@@ -69,6 +78,7 @@ def client(monkeypatch):
 
 # ── query construction ────────────────────────────────────────────────────────
 
+
 def test_hybrid_prefetches_dense_and_bm25_and_fuses_with_rrf(client):
     results = qdrant_service.search_enterprise_knowledge("backoffLimit", limit=15, mode="hybrid")
 
@@ -81,8 +91,15 @@ def test_hybrid_prefetches_dense_and_bm25_and_fuses_with_rrf(client):
     assert (sparse_prefetch.using, sparse_prefetch.query) == ("bm25", SPARSE)
     assert dense_prefetch.limit == sparse_prefetch.limit == qdrant_service.HYBRID_PREFETCH_LIMIT
     assert "using" not in query
-    assert results == [{"content": "backoffLimit: 4", "source": "jobs.html", "source_type": "true",
-                        "score": 0.5, "retrieval_mode": "hybrid"}]
+    assert results == [
+        {
+            "content": "backoffLimit: 4",
+            "source": "jobs.html",
+            "source_type": "true",
+            "score": 0.5,
+            "retrieval_mode": "hybrid",
+        }
+    ]
 
 
 def test_hybrid_prefetch_is_never_smaller_than_the_limit(client):
@@ -98,8 +115,9 @@ def test_default_mode_is_hybrid(client):
 
 
 def test_dense_mode_queries_the_dense_vector_only(client, monkeypatch):
-    monkeypatch.setattr(qdrant_service, "embed_sparse_query",
-                        lambda q: pytest.fail("dense mode must not compute a BM25 vector"))
+    monkeypatch.setattr(
+        qdrant_service, "embed_sparse_query", lambda q: pytest.fail("dense mode must not compute a BM25 vector")
+    )
     monkeypatch.setenv("RETRIEVAL_MODE", "dense")
 
     results = qdrant_service.search_enterprise_knowledge("q", limit=8)
@@ -135,6 +153,7 @@ def test_invalid_retrieval_mode_raises_a_clear_error(client, monkeypatch, value)
 
 # ── failures raise RetrievalError instead of returning [] ─────────────────────
 
+
 def test_qdrant_failure_raises_retrieval_error_not_empty_list(client):
     client.query_error = ConnectionError("connection refused")
 
@@ -161,6 +180,7 @@ def test_no_matches_is_still_an_empty_list(client, monkeypatch):
 
 # ── collection schema ─────────────────────────────────────────────────────────
 
+
 def test_ensure_collection_creates_named_dense_and_bm25_idf_vectors(client):
     client.exists = False
 
@@ -185,19 +205,33 @@ def test_old_unnamed_vector_collection_raises_reingest_error(client):
         qdrant_service.ensure_collection()
 
     message = str(error.value)
-    assert message.startswith("Collection uses the old schema — re-ingest with: "
-                              "python -m app.ingestion.processor DATA --wipe")
-    assert client.created == []                      # never silently mixes formats
+    assert message.startswith(
+        "Collection uses the old schema — re-ingest with: python -m app.ingestion.processor DATA --wipe"
+    )
+    assert client.created == []  # never silently mixes formats
 
 
-@pytest.mark.parametrize("info", [
-    SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(
-        vectors={"text": models.VectorParams(size=3, distance=models.Distance.COSINE)},
-        sparse_vectors={"bm25": models.SparseVectorParams(modifier=models.Modifier.IDF)}))),
-    SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(
-        vectors={"dense": models.VectorParams(size=3, distance=models.Distance.COSINE)}, sparse_vectors=None))),
-    _new_schema_info(modifier=models.Modifier.NONE),
-])
+@pytest.mark.parametrize(
+    "info",
+    [
+        SimpleNamespace(
+            config=SimpleNamespace(
+                params=SimpleNamespace(
+                    vectors={"text": models.VectorParams(size=3, distance=models.Distance.COSINE)},
+                    sparse_vectors={"bm25": models.SparseVectorParams(modifier=models.Modifier.IDF)},
+                )
+            )
+        ),
+        SimpleNamespace(
+            config=SimpleNamespace(
+                params=SimpleNamespace(
+                    vectors={"dense": models.VectorParams(size=3, distance=models.Distance.COSINE)}, sparse_vectors=None
+                )
+            )
+        ),
+        _new_schema_info(modifier=models.Modifier.NONE),
+    ],
+)
 def test_partial_or_wrong_schemas_are_rejected(info):
     with pytest.raises(CollectionSchemaError, match="re-ingest with"):
         qdrant_service.check_collection_schema(info, "enterprise_rag")

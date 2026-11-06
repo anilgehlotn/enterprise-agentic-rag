@@ -1,4 +1,5 @@
 import logfire
+
 from app.agents.routing import is_conversational
 from app.agents.state import AgentState, conversation_history, latest_user_question
 from app.services.retrieval.citations import format_context
@@ -12,7 +13,7 @@ def no_evidence_answer(question: str) -> str:
     """
     return (
         "I couldn't find this in the indexed documents, so I won't answer from general "
-        f"knowledge. The current knowledge base doesn't appear to cover: \"{question}\".\n\n"
+        f'knowledge. The current knowledge base doesn\'t appear to cover: "{question}".\n\n'
         "If you have a document that covers it, upload it with **Upload files** and ask again."
     )
 
@@ -80,8 +81,7 @@ def generate_node(state: AgentState):
     with logfire.span("✍️ LLM Synthesis"):
         try:
             response = get_portkey_client().chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
+                messages=[{"role": "user", "content": prompt}], temperature=0.1
             )
             content = response.choices[0].message.content
             cache_status = extract_cache_status(response)
@@ -100,7 +100,7 @@ def generate_node(state: AgentState):
                 "final_answer": content,
                 "status": status,
                 "plan": plan_update,
-                "messages": [{"role": "assistant", "content": content}]
+                "messages": [{"role": "assistant", "content": content}],
             }
 
         except Exception as e:

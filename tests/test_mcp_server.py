@@ -5,7 +5,6 @@ rag_service functions are mocked: no API keys, LLM, Qdrant or network.
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -56,6 +55,7 @@ def _error_text(result):
 @pytest.fixture
 def fail_if_called(monkeypatch):
     """Validation must reject input before any service call."""
+
     def explode(*args, **kwargs):
         raise AssertionError("service must not be called for invalid input")
 
@@ -64,6 +64,7 @@ def fail_if_called(monkeypatch):
 
 
 # ── tools/list ────────────────────────────────────────────────────────────────
+
 
 def test_lists_exactly_the_three_read_only_tools():
     tools = _list_tools()
@@ -111,6 +112,7 @@ def test_descriptions_tell_the_client_when_to_prefer_each_tool():
 
 # ── tools/call happy paths ────────────────────────────────────────────────────
 
+
 def test_ask_knowledge_base_returns_answer_sources_and_grounded(monkeypatch):
     calls = []
 
@@ -136,14 +138,16 @@ def test_ask_knowledge_base_returns_answer_sources_and_grounded(monkeypatch):
     assert data["grounded"] is True
     assert data["status"] == "Response generated."
     assert data["thought_process"][-1].startswith("Verification")
-    assert data["sources"] == [{
-        "source": "cronjobs.docx",
-        "source_type": "true",
-        "retrieval_score": 0.71,
-        "rerank_score": 0.93,
-        "preview": "A CronJob creates Jobs on a repeating schedule.",
-    }]                                                   # preview only, no full content
-    assert json.loads(result.content[0].text) == data    # text block mirrors structured output
+    assert data["sources"] == [
+        {
+            "source": "cronjobs.docx",
+            "source_type": "true",
+            "retrieval_score": 0.71,
+            "rerank_score": 0.93,
+            "preview": "A CronJob creates Jobs on a repeating schedule.",
+        }
+    ]  # preview only, no full content
+    assert json.loads(result.content[0].text) == data  # text block mirrors structured output
 
 
 def test_ask_uses_default_thread_and_passes_guardrail_blocks_through(monkeypatch):
@@ -151,9 +155,14 @@ def test_ask_uses_default_thread_and_passes_guardrail_blocks_through(monkeypatch
 
     def blocked(question, thread_id):
         seen["thread_id"] = thread_id
-        return {"question": question, "answer": "I can't help with that.", "sources": [],
-                "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
-                "status": "Blocked by guardrails.", "grounded": None}
+        return {
+            "question": question,
+            "answer": "I can't help with that.",
+            "sources": [],
+            "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
+            "status": "Blocked by guardrails.",
+            "grounded": None,
+        }
 
     monkeypatch.setattr(rag_service, "answer_question", blocked)
 
@@ -204,6 +213,7 @@ def test_list_indexed_documents(monkeypatch):
 
 # ── validation ────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize("question", ["", "   ", "\n\t"])
 def test_ask_rejects_empty_question(fail_if_called, question):
     assert "`question` must not be empty" in _error_text(_call("ask_knowledge_base", {"question": question}))
@@ -217,9 +227,17 @@ def test_ask_rejects_too_long_question(fail_if_called):
 
 
 def test_ask_accepts_exactly_the_limit(monkeypatch):
-    monkeypatch.setattr(rag_service, "answer_question", lambda q, t: {
-        "answer": "ok", "status": "Response generated.", "sources": [], "thought_process": [], "grounded": None,
-    })
+    monkeypatch.setattr(
+        rag_service,
+        "answer_question",
+        lambda q, t: {
+            "answer": "ok",
+            "status": "Response generated.",
+            "sources": [],
+            "thought_process": [],
+            "grounded": None,
+        },
+    )
 
     assert _call("ask_knowledge_base", {"question": "x" * 4000}).is_error is False
 
@@ -259,6 +277,7 @@ def test_missing_required_argument_is_an_error_not_a_crash(fail_if_called):
 
 # ── service failures ──────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "tool, service, arguments",
     [
@@ -276,14 +295,21 @@ def test_service_exception_becomes_friendly_error(monkeypatch, tool, service, ar
     text = _error_text(_call(tool, arguments))
 
     assert "could not complete the request" in text
-    assert "sk-secret" not in text and "10.0.0.5" not in text     # internals stay in the server log
+    assert "sk-secret" not in text and "10.0.0.5" not in text  # internals stay in the server log
 
 
 def test_pipeline_error_status_is_reported_as_tool_error(monkeypatch):
-    monkeypatch.setattr(rag_service, "answer_question", lambda q, t: {
-        "answer": rag_service.INTERNAL_ERROR_ANSWER, "status": "error",
-        "sources": [], "thought_process": ["Error encountered during execution."], "grounded": None,
-    })
+    monkeypatch.setattr(
+        rag_service,
+        "answer_question",
+        lambda q, t: {
+            "answer": rag_service.INTERNAL_ERROR_ANSWER,
+            "status": "error",
+            "sources": [],
+            "thought_process": ["Error encountered during execution."],
+            "grounded": None,
+        },
+    )
 
     assert "internal error" in _error_text(_call("ask_knowledge_base", {"question": "What is a Job?"}))
 
@@ -305,6 +331,7 @@ def test_server_keeps_serving_after_a_failure(monkeypatch):
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def test_cli_defaults_to_stdio_and_localhost():
     args = mcp_server.parse_args([])
 
@@ -317,8 +344,10 @@ def test_cli_http_options():
     assert (args.transport, args.host, args.port) == ("http", "127.0.0.1", 9000)
 
 
-@pytest.mark.parametrize("host, loopback", [("127.0.0.1", True), ("localhost", True), ("::1", True),
-                                             ("0.0.0.0", False), ("192.168.1.10", False)])
+@pytest.mark.parametrize(
+    "host, loopback",
+    [("127.0.0.1", True), ("localhost", True), ("::1", True), ("0.0.0.0", False), ("192.168.1.10", False)],
+)
 def test_loopback_detection(host, loopback):
     assert mcp_server._is_loopback(host) is loopback
 
@@ -358,8 +387,11 @@ mcp_server.main(["--transport", "stdio"])
 
 def test_stdio_transport_end_to_end_with_stray_print(tmp_path):
     stderr_log = tmp_path / "server-stderr.log"
-    env = {key: value for key, value in os.environ.items()
-           if key not in {"PORTKEY_API_KEY", "GROQ_API_KEY", "QDRANT_API_KEY", "LOGFIRE_TOKEN"}}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PORTKEY_API_KEY", "GROQ_API_KEY", "QDRANT_API_KEY", "LOGFIRE_TOKEN"}
+    }
     env.update(PYTHONPATH=str(ROOT), MCP_TEST_STDERR=str(stderr_log))
     params = StdioServerParameters(command=sys.executable, args=["-c", STDIO_SERVER], cwd=str(ROOT), env=env)
 
@@ -375,8 +407,9 @@ def test_stdio_transport_end_to_end_with_stray_print(tmp_path):
     assert {tool.name for tool in tools.tools} == TOOL_NAMES
     assert listed.is_error is False
     assert listed.structured_content == {
-        "total_documents": 1, "documents": [{"filename": "a.txt", "source_type": "true", "chunk_count": 2}],
+        "total_documents": 1,
+        "documents": [{"filename": "a.txt", "source_type": "true", "chunk_count": 2}],
     }
     stderr = stderr_log.read_text()
-    assert "heavy modules at startup: []" in stderr      # lazy imports: no keys/clients needed
-    assert "stray print from a dependency" in stderr     # stdout diverted to stderr while serving
+    assert "heavy modules at startup: []" in stderr  # lazy imports: no keys/clients needed
+    assert "stray print from a dependency" in stderr  # stdout diverted to stderr while serving

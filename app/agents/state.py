@@ -1,22 +1,22 @@
-from typing import TypedDict, List, Annotated, Optional
 import operator
+from typing import Annotated, TypedDict
 
 
 class AgentState(TypedDict):
     # Using Annotated with operator.add ensures that messages
     # are appended to the history rather than replaced.
-    messages: Annotated[List[dict], operator.add]
+    messages: Annotated[list[dict], operator.add]
     current_query: str
-    documents: List[dict]
-    plan: List[str]
+    documents: list[dict]
+    plan: list[str]
     status: str
     final_answer: str
     # Corrective RAG: incremented by the retriever, capped by MAX_RETRIEVAL_ATTEMPTS.
     retrieval_attempts: int
     # Self-RAG: verifier verdict. None = not verified (conversational / no docs / unclear).
-    grounded: Optional[bool]
+    grounded: bool | None
     # Set by the retriever when the knowledge base can't be searched; the graph then ends.
-    retrieval_error: Optional[str]
+    retrieval_error: str | None
 
 
 def new_request_state(question: str) -> dict:

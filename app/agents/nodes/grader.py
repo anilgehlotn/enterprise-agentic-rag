@@ -67,9 +67,8 @@ def grade_node(state: AgentState):
         return {
             "documents": documents,
             "status": "Grader output unreadable; keeping all chunks.",
-            "plan": state["plan"] + [
-                f"{label}: grader output unreadable, kept all {len(documents)} chunks (fail open)"
-            ],
+            "plan": state["plan"]
+            + [f"{label}: grader output unreadable, kept all {len(documents)} chunks (fail open)"],
         }
 
     kept = [documents[index] for index in relevant]

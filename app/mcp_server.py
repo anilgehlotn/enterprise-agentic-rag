@@ -26,7 +26,7 @@ import ipaddress
 import logging
 import os
 import sys
-from typing import Annotated, Optional
+from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -53,9 +53,7 @@ KNOWLEDGE_SCOPE = (
 
 # Every tool only reads; none writes, uploads or deletes. The agent and search call
 # external services (LLM gateway, vector DB), hence open_world_hint=True.
-READ_ONLY = ToolAnnotations(
-    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
-)
+READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 READ_ONLY_LOCAL = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
@@ -63,19 +61,20 @@ READ_ONLY_LOCAL = ToolAnnotations(
 
 # ── Output models (become each tool's outputSchema) ───────────────────────────
 
+
 class EvidenceSource(BaseModel):
     """A cited source. The number [n] in the answer refers to sources[n-1]."""
 
     source: str
     source_type: str = "unknown"
-    retrieval_score: Optional[float] = None
-    rerank_score: Optional[float] = None
+    retrieval_score: float | None = None
+    rerank_score: float | None = None
     preview: str = ""
 
 
 class AskResult(BaseModel):
     answer: str
-    grounded: Optional[bool] = Field(
+    grounded: bool | None = Field(
         default=None,
         description="True = verified against sources, False = not fully supported, null = not verified.",
     )
@@ -101,6 +100,7 @@ class DocumentList(BaseModel):
 
 
 # ── Input validation (clear messages, never tracebacks) ───────────────────────
+
 
 def _require_text(value: str, field: str, max_chars: int | None = None) -> str:
     text = value.strip() if isinstance(value, str) else ""
@@ -183,8 +183,8 @@ def ask_knowledge_base(
 
     try:
         result = rag_service.answer_question(question, thread_id)
-    except Exception:
-        raise _service_failure("answering the question")
+    except Exception as exc:
+        raise _service_failure("answering the question") from exc
 
     if result.get("status") == "error":
         # answer_question already logged the cause; tell the client it failed.
@@ -205,7 +205,8 @@ def ask_knowledge_base(
     description=(
         f"Semantic search over the enterprise knowledge base. {KNOWLEDGE_SCOPE}\n\n"
         "Returns the top_k most relevant raw text chunks (hybrid semantic + BM25 keyword "
-        "search fused with RRF, then a cross-encoder rerank) with their source file and scores. No LLM is called: fast and cheap, but "
+        "search fused with RRF, then a cross-encoder rerank) with their source file and scores. "
+        "No LLM is called: fast and cheap, but "
         "no answer is written and nothing is fact-checked.\n\n"
         "Prefer this to look up or quote exact passages, compare sources, or check whether "
         "a topic is covered at all. Prefer ask_knowledge_base for an explained, cited answer. "
@@ -233,11 +234,11 @@ def search_knowledge_base(
 
     try:
         results = rag_service.search_knowledge(query, top_k)
-    except RetrievalError:
+    except RetrievalError as exc:
         logger.exception("Knowledge base unavailable during search_knowledge_base")
-        raise ToolError(KNOWLEDGE_BASE_UNAVAILABLE_TOOL_ERROR)
-    except Exception:
-        raise _service_failure("searching the knowledge base")
+        raise ToolError(KNOWLEDGE_BASE_UNAVAILABLE_TOOL_ERROR) from exc
+    except Exception as exc:
+        raise _service_failure("searching the knowledge base") from exc
 
     return SearchResult(query=query, results=[SourceChunk(**chunk) for chunk in results])
 
@@ -256,8 +257,8 @@ def search_knowledge_base(
 def list_indexed_documents() -> DocumentList:
     try:
         documents = rag_service.list_documents()
-    except Exception:
-        raise _service_failure("listing documents")
+    except Exception as exc:
+        raise _service_failure("listing documents") from exc
 
     return DocumentList(
         total_documents=len(documents),
@@ -266,6 +267,7 @@ def list_indexed_documents() -> DocumentList:
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
+
 
 def configure_logging(level: str = "INFO") -> None:
     """Send every log line to stderr. stdout is reserved for the stdio protocol."""
@@ -311,14 +313,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="python -m app.mcp_server",
         description="MCP server exposing the Enterprise Agentic RAG knowledge base as read-only tools.",
     )
-    parser.add_argument("--transport", choices=["stdio", "http"], default="stdio",
-                        help="stdio for Claude Desktop / Claude Code (default); http for streamable HTTP.")
-    parser.add_argument("--host", default=DEFAULT_HTTP_HOST,
-                        help=f"HTTP bind address (default {DEFAULT_HTTP_HOST}, local machine only).")
-    parser.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT,
-                        help=f"HTTP port (default {DEFAULT_HTTP_PORT}).")
-    parser.add_argument("--log-level", default="INFO",
-                        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default="stdio",
+        help="stdio for Claude Desktop / Claude Code (default); http for streamable HTTP.",
+    )
+    parser.add_argument(
+        "--host",
+        default=DEFAULT_HTTP_HOST,
+        help=f"HTTP bind address (default {DEFAULT_HTTP_HOST}, local machine only).",
+    )
+    parser.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT, help=f"HTTP port (default {DEFAULT_HTTP_PORT}).")
+    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
     return parser.parse_args(argv)
 
 
@@ -334,7 +341,8 @@ def main(argv: list[str] | None = None) -> None:
     if not _is_loopback(args.host):
         logger.warning(
             "Binding MCP HTTP server to %s exposes it beyond this machine. These tools have no "
-            "authentication; put it behind an authenticating proxy.", args.host,
+            "authentication; put it behind an authenticating proxy.",
+            args.host,
         )
     logger.info("Starting MCP server 'enterprise-rag' on http://%s:%d/mcp", args.host, args.port)
     mcp.run("streamable-http", host=args.host, port=args.port)

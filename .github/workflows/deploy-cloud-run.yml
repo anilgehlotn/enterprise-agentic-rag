@@ -1,0 +1,159 @@
+name: Deploy to Cloud Run
+
+# Manual only for now: Actions tab → "Deploy to Cloud Run" → Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: Cloud Run region
+        required: true
+        default: asia-south1
+      service:
+        description: Cloud Run service name
+        required: true
+        default: enterprise-agentic-rag
+      public:
+        description: Allow unauthenticated requests (needed for a browser/Streamlit demo)
+        type: boolean
+        required: true
+        default: true
+
+# Never run two deploys of the same service at once; don't cancel one mid-flight.
+concurrency:
+  group: deploy-cloud-run-${{ inputs.service }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # lets google-github-actions/auth mint a GitHub OIDC token for WIF
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  # Artifact Registry lives in vars.GCP_REGION; Cloud Run region comes from the input.
+  AR_LOCATION: ${{ vars.GCP_REGION }}
+  AR_REPOSITORY: ${{ vars.AR_REPOSITORY }}
+  IMAGE_NAME: enterprise-agentic-rag
+
+jobs:
+  deploy:
+    name: Build, push and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check repository variables
+        run: |
+          missing=0
+          for name in GCP_PROJECT_ID GCP_REGION GCP_WIF_PROVIDER GCP_SERVICE_ACCOUNT AR_REPOSITORY; do
+            case "$name" in
+              GCP_PROJECT_ID) v="${{ vars.GCP_PROJECT_ID }}" ;;
+              GCP_REGION) v="${{ vars.GCP_REGION }}" ;;
+              GCP_WIF_PROVIDER) v="${{ vars.GCP_WIF_PROVIDER }}" ;;
+              GCP_SERVICE_ACCOUNT) v="${{ vars.GCP_SERVICE_ACCOUNT }}" ;;
+              AR_REPOSITORY) v="${{ vars.AR_REPOSITORY }}" ;;
+            esac
+            if [ -z "$v" ]; then echo "::error::Repository variable $name is not set"; missing=1; fi
+          done
+          exit $missing
+
+      # Keyless auth: GitHub's OIDC token is exchanged for short-lived Google credentials
+      # through Workload Identity Federation. No service-account JSON key exists anywhere.
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.AR_LOCATION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Compute image reference
+        id: image
+        run: echo "ref=${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image (tagged with the git SHA)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.ref }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          service: ${{ inputs.service }}
+          region: ${{ inputs.region }}
+          image: ${{ steps.image.outputs.ref }}
+          # Non-secret configuration.
+          env_vars: |-
+            QDRANT_COLLECTION=enterprise_rag_v2
+            RETRIEVAL_MODE=hybrid
+          env_vars_update_strategy: overwrite
+          # Every key comes from Secret Manager (secret name = env var name, latest version).
+          # The runtime service account needs roles/secretmanager.secretAccessor on each.
+          secrets: |-
+            GROQ_API_KEY=GROQ_API_KEY:latest
+            GROQ_FALLBACK_API_KEY=GROQ_FALLBACK_API_KEY:latest
+            PORTKEY_API_KEY=PORTKEY_API_KEY:latest
+            GEMINI_API_KEY=GEMINI_API_KEY:latest
+            QDRANT_API_KEY=QDRANT_API_KEY:latest
+            QDRANT_CLUSTER_ENDPOINT=QDRANT_CLUSTER_ENDPOINT:latest
+            LOGFIRE_TOKEN=LOGFIRE_TOKEN:latest
+            LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest
+          secrets_update_strategy: overwrite
+          flags: >-
+            --min-instances=0
+            --max-instances=2
+            --memory=2Gi
+            --cpu=1
+            --timeout=300
+            --port=8080
+            ${{ vars.CLOUD_RUN_RUNTIME_SA && format('--service-account={0}', vars.CLOUD_RUN_RUNTIME_SA) || '' }}
+            ${{ inputs.public && '--allow-unauthenticated' || '--no-allow-unauthenticated' }}
+
+      - name: Smoke test GET /health
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          PUBLIC: ${{ inputs.public }}
+        run: |
+          echo "Service URL: $URL"
+          auth_header=()
+          if [ "$PUBLIC" != "true" ]; then
+            # Private service: call it with an ID token for the deploy service account.
+            # Needs roles/iam.serviceAccountTokenCreator on that SA (see DOCS/12).
+            token=$(gcloud auth print-identity-token \
+              --impersonate-service-account="${{ vars.GCP_SERVICE_ACCOUNT }}" --audiences="$URL")
+            auth_header=(-H "Authorization: Bearer $token")
+          fi
+          for i in $(seq 1 12); do
+            body=$(curl -fsS --max-time 30 "${auth_header[@]}" "$URL/health" || true)
+            if [ -n "$body" ] && echo "$body" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") == "ok" else 1)'; then
+              echo "Healthy: $body"
+              {
+                echo "### Deployed ✅"
+                echo "- URL: $URL"
+                echo "- Image: ${{ steps.image.outputs.ref }}"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Attempt $i: not healthy yet (${body:-no response}); retrying in 10s"
+            sleep 10
+          done
+          echo "::error::$URL/health did not return status=ok"
+          exit 1

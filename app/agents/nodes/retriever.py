@@ -1,4 +1,5 @@
 import logfire
+
 from app.agents.routing import MAX_RETRIEVAL_ATTEMPTS
 from app.agents.state import AgentState
 from app.services.retrieval.schema import (
@@ -54,7 +55,5 @@ def retrieve_node(state: AgentState):
         "documents": reranked_records,
         "retrieval_attempts": attempt,
         "status": "Found technical context." if reranked_records else "No matching context found.",
-        "plan": state["plan"] + [
-            f"{label}: {len(reranked_records)} chunks retrieved for '{query}'"
-        ],
+        "plan": state["plan"] + [f"{label}: {len(reranked_records)} chunks retrieved for '{query}'"],
     }

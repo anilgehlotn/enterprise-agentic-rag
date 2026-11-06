@@ -37,7 +37,7 @@ import json
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from evals.retrieval_metrics import (
@@ -112,14 +112,15 @@ def _search_with_retry(search, query: str, mode: str, limit: int):
         except RetrievalError as exc:
             if attempt == MAX_SEARCH_ATTEMPTS - 1:
                 raise
-            wait = BACKOFF_SECONDS * 2 ** attempt
+            wait = BACKOFF_SECONDS * 2**attempt
             print(f"  search failed ({exc.__cause__ or exc}); retrying in {wait}s", file=sys.stderr)
             time.sleep(wait)
     raise AssertionError("unreachable")
 
 
-def run_benchmark(samples: list[dict], k: int = 5, candidates: int = 15, delay: float = 1.5,
-                  search=None, rerank=None) -> tuple[dict[str, ConfigResult], list[dict]]:
+def run_benchmark(
+    samples: list[dict], k: int = 5, candidates: int = 15, delay: float = 1.5, search=None, rerank=None
+) -> tuple[dict[str, ConfigResult], list[dict]]:
     """Runs every sample through the four configurations. search/rerank are injectable for tests."""
     if search is None:
         from app.services.retrieval.qdrant_service import search_enterprise_knowledge as search
@@ -163,6 +164,7 @@ def run_benchmark(samples: list[dict], k: int = 5, candidates: int = 15, delay: 
 
 # ── Reporting ─────────────────────────────────────────────────────────────────
 
+
 def comparison_table(results: dict[str, ConfigResult], k: int) -> str:
     lines = [
         f"| Configuration | Hit rate@{k} | MRR@{k} | Noise rate@{k} ↓ | Avg latency (ms) |",
@@ -171,8 +173,7 @@ def comparison_table(results: dict[str, ConfigResult], k: int) -> str:
     for config in CONFIGS:
         s = results[config.key].summary(k)
         lines.append(
-            f"| {config.label} | {s['hit_rate']:.2f} | {s['mrr']:.3f} | "
-            f"{s['noise_rate']:.2f} | {s['latency_ms']:.0f} |"
+            f"| {config.label} | {s['hit_rate']:.2f} | {s['mrr']:.3f} | {s['noise_rate']:.2f} | {s['latency_ms']:.0f} |"
         )
     return "\n".join(lines)
 
@@ -205,10 +206,10 @@ def collection_metadata() -> dict:
 def render_report(results, per_question, meta: dict, k: int, candidates: int, n_questions: int) -> str:
     return f"""# Retrieval benchmark
 
-- **Date:** {meta['date']}
-- **Collection:** `{meta['collection']}` ({meta['points']} chunks)
-- **Dense embedding model:** `{meta['dense_model']}`
-- **Sparse model:** `{meta['sparse_model']}` (Qdrant IDF modifier)
+- **Date:** {meta["date"]}
+- **Collection:** `{meta["collection"]}` ({meta["points"]} chunks)
+- **Dense embedding model:** `{meta["dense_model"]}`
+- **Sparse model:** `{meta["sparse_model"]}` (Qdrant IDF modifier)
 - **Questions:** {n_questions} golden questions (`evals/golden_dataset.json`)
 - **k:** {k} &nbsp;·&nbsp; **FlashRank candidate pool:** {candidates}
 
@@ -232,7 +233,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m evals.retrieval_benchmark", description=__doc__.split("\n")[0])
     parser.add_argument("--k", type=int, default=5, help="cut-off for hit rate / MRR / noise rate (default 5)")
     parser.add_argument("--candidates", type=int, default=15, help="candidates fetched before FlashRank (default 15)")
-    parser.add_argument("--delay", type=float, default=1.5, help="seconds to sleep after each search (Gemini rate limit)")
+    parser.add_argument(
+        "--delay", type=float, default=1.5, help="seconds to sleep after each search (Gemini rate limit)"
+    )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser.parse_args(argv)
@@ -248,7 +251,7 @@ def main(argv=None) -> None:
     results, per_question = run_benchmark(samples, k=args.k, candidates=args.candidates, delay=args.delay)
 
     meta = collection_metadata()
-    meta["date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    meta["date"] = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     report = render_report(results, per_question, meta, args.k, args.candidates, len(samples))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

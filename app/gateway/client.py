@@ -1,11 +1,9 @@
 from functools import lru_cache
 
-import logfire
-from portkey_ai import Portkey, createHeaders, PORTKEY_GATEWAY_URL
 from langchain_openai import ChatOpenAI
+from portkey_ai import PORTKEY_GATEWAY_URL, Portkey, createHeaders
 
 from app.config import settings
-
 
 # Production gateway config:
 #   - Fallback: primary @rag/llama-3.3-70b-versatile → @brag/llama-3.1-8b-instant on failure
@@ -14,23 +12,18 @@ from app.config import settings
 GATEWAY_CONFIG = {
     "strategy": {"mode": "fallback"},
     "cache": {"mode": "simple"},
-    "retry": {
-        "attempts": 2,
-        "on_status_codes": [429, 503]
-    },
+    "retry": {"attempts": 2, "on_status_codes": [429, 503]},
     "targets": [
         {"override_params": {"model": f"@{settings.GROQ_SLUG}/llama-3.3-70b-versatile"}},
         {"override_params": {"model": f"@{settings.GROQ_SLUG_2}/llama-3.1-8b-instant"}},
-    ]
+    ],
 }
+
 
 @lru_cache(maxsize=1)
 def get_portkey_client() -> Portkey:
     """Native Portkey client, created on first use (not at import time)."""
-    return Portkey(
-        api_key=settings.PORTKEY_API_KEY,
-        config=GATEWAY_CONFIG
-    )
+    return Portkey(api_key=settings.PORTKEY_API_KEY, config=GATEWAY_CONFIG)
 
 
 def get_langchain_llm(feature: str = "rag") -> ChatOpenAI:
@@ -52,13 +45,10 @@ def get_langchain_llm(feature: str = "rag") -> ChatOpenAI:
         default_headers=createHeaders(
             api_key=settings.PORTKEY_API_KEY,
             config=GATEWAY_CONFIG,
-            metadata={
-                "feature": feature,
-                "_user": "rag-system",
-                "environment": "production"
-            }
-        )
+            metadata={"feature": feature, "_user": "rag-system", "environment": "production"},
+        ),
     )
+
 
 def extract_cache_status(response) -> str:
     """

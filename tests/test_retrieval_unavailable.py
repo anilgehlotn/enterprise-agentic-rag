@@ -37,10 +37,14 @@ def qdrant_down(monkeypatch):
         raise RetrievalError("Knowledge base search failed (ConnectionError).")
 
     monkeypatch.delenv("RETRIEVAL_MODE", raising=False)
-    monkeypatch.setitem(sys.modules, "app.services.retrieval.qdrant_service",
-                        SimpleNamespace(search_enterprise_knowledge=search))
-    monkeypatch.setitem(sys.modules, "app.services.retrieval.ranking_service",
-                        SimpleNamespace(rerank_records=lambda *a, **k: pytest.fail("rerank must not run")))
+    monkeypatch.setitem(
+        sys.modules, "app.services.retrieval.qdrant_service", SimpleNamespace(search_enterprise_knowledge=search)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.retrieval.ranking_service",
+        SimpleNamespace(rerank_records=lambda *a, **k: pytest.fail("rerank must not run")),
+    )
     return searches
 
 
@@ -51,13 +55,14 @@ def _technical_planner(state):
 def _must_not_run(name):
     def node(state):
         raise AssertionError(f"{name} must not run when the knowledge base is unavailable")
+
     return node
 
 
 def _graph(self_correction=True):
     return build_graph(
         planner=_technical_planner,
-        retriever=retriever.retrieve_node,          # the real node
+        retriever=retriever.retrieve_node,  # the real node
         grader=_must_not_run("grader"),
         rewriter=_must_not_run("rewriter"),
         responder=_must_not_run("responder"),
@@ -67,6 +72,7 @@ def _graph(self_correction=True):
 
 
 # ── retriever node ────────────────────────────────────────────────────────────
+
 
 def test_retriever_node_reports_unavailable(qdrant_down):
     state = new_request_state("What does backoffLimit do?")
@@ -89,10 +95,14 @@ def test_old_schema_collection_is_also_reported_unavailable(monkeypatch):
     def search(query, limit, mode=None):
         raise CollectionSchemaError("'enterprise_rag' has a single unnamed vector")
 
-    monkeypatch.setitem(sys.modules, "app.services.retrieval.qdrant_service",
-                        SimpleNamespace(search_enterprise_knowledge=search))
-    monkeypatch.setitem(sys.modules, "app.services.retrieval.ranking_service",
-                        SimpleNamespace(rerank_records=lambda *a, **k: pytest.fail("rerank must not run")))
+    monkeypatch.setitem(
+        sys.modules, "app.services.retrieval.qdrant_service", SimpleNamespace(search_enterprise_knowledge=search)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.retrieval.ranking_service",
+        SimpleNamespace(rerank_records=lambda *a, **k: pytest.fail("rerank must not run")),
+    )
     state = new_request_state("q")
     state.update(plan=["Intent: Technical"])
 
@@ -109,7 +119,7 @@ def test_graph_ends_after_one_attempt_without_rewrite(qdrant_down, self_correcti
     assert final["final_answer"] == KNOWLEDGE_BASE_UNAVAILABLE_ANSWER
     assert final["status"] == KNOWLEDGE_BASE_UNAVAILABLE_STATUS
     assert final["retrieval_attempts"] == 1
-    assert len(qdrant_down) == 1                                   # no rewrite-and-retry
+    assert len(qdrant_down) == 1  # no rewrite-and-retry
     assert final["plan"][-1] == "Retrieval attempt 1/2 (hybrid): knowledge base unavailable"
 
 
@@ -119,13 +129,15 @@ def test_retrieval_error_is_reset_for_the_next_request_on_the_same_thread():
 
 # ── /query ────────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def api(monkeypatch):
     monkeypatch.setitem(sys.modules, "app.ingestion.processor", SimpleNamespace(process_file=None))
     monkeypatch.delitem(sys.modules, "app.main", raising=False)
     monkeypatch.setattr(rag_service, "ensure_rails", lambda: None)
-    monkeypatch.setitem(sys.modules, "app.guardrails",
-                        SimpleNamespace(ensure_rails=lambda: None, guard=lambda message: (False, None)))
+    monkeypatch.setitem(
+        sys.modules, "app.guardrails", SimpleNamespace(ensure_rails=lambda: None, guard=lambda message: (False, None))
+    )
     main = importlib.import_module("app.main")
     yield main
     sys.modules.pop("app.main", None)
@@ -156,6 +168,7 @@ def test_startup_rejects_invalid_retrieval_mode(api, monkeypatch):
 
 
 # ── rag_service search + MCP tools ────────────────────────────────────────────
+
 
 def test_search_knowledge_propagates_retrieval_error(qdrant_down):
     with pytest.raises(RetrievalError):
@@ -193,11 +206,18 @@ def test_mcp_search_end_to_end_through_the_service(qdrant_down):
 
 
 def test_mcp_ask_reports_unavailable_status_as_a_normal_answer(monkeypatch):
-    monkeypatch.setattr(rag_service, "answer_question", lambda question, thread_id: {
-        "question": question, "answer": KNOWLEDGE_BASE_UNAVAILABLE_ANSWER,
-        "thought_process": ["Intent: Technical", "Retrieval attempt 1/2 (hybrid): knowledge base unavailable"],
-        "status": KNOWLEDGE_BASE_UNAVAILABLE_STATUS, "sources": [], "grounded": None,
-    })
+    monkeypatch.setattr(
+        rag_service,
+        "answer_question",
+        lambda question, thread_id: {
+            "question": question,
+            "answer": KNOWLEDGE_BASE_UNAVAILABLE_ANSWER,
+            "thought_process": ["Intent: Technical", "Retrieval attempt 1/2 (hybrid): knowledge base unavailable"],
+            "status": KNOWLEDGE_BASE_UNAVAILABLE_STATUS,
+            "sources": [],
+            "grounded": None,
+        },
+    )
 
     result = _call("ask_knowledge_base", {"question": "What does backoffLimit do?"})
 

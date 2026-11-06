@@ -1,7 +1,8 @@
+import logfire
+
 from app.agents.llm import get_llm
 from app.agents.routing import CONVERSATIONAL, normalize_planner_decision
 from app.agents.state import AgentState, conversation_history
-import logfire
 
 
 def planner_node(state: AgentState):
@@ -26,7 +27,7 @@ def planner_node(state: AgentState):
     2. If it is a technical question about Kubernetes, Intel, or Networking that requires fresh documentation, output a refined search query.
 
     Output ONLY 'CONVERSATIONAL' or the search query.
-    """
+    """  # noqa: E501 -- LLM prompt text; wrapping it would change the prompt
 
     with logfire.span("🧠 Planner Decision"):
         # Portkey-backed LLM (fallback + cache + retry), created lazily on first use.
@@ -38,11 +39,11 @@ def planner_node(state: AgentState):
         return {
             "current_query": CONVERSATIONAL,
             "status": "Handling conversationally (using memory)...",
-            "plan": ["Intent: Conversational/Memory", "Retrieval: Skipped"]
+            "plan": ["Intent: Conversational/Memory", "Retrieval: Skipped"],
         }
 
     return {
         "current_query": decision,
         "status": f"Technical research needed. Searching for: {decision}",
-        "plan": ["Intent: Technical", f"Search Term: {decision}"]
+        "plan": ["Intent: Technical", f"Search Term: {decision}"],
     }
