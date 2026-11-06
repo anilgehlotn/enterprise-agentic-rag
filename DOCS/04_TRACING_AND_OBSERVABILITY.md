@@ -7,14 +7,16 @@ In an Agentic system, "Why did the AI say that?" is the most important question.
 ## 🔬 The Observability Stack
 
 ### 1. Pydantic Logfire (System Tracing)
-Logfire provides distributed tracing for the entire infrastructure. It tracks:
-*   **API Latency**: How long the backend takes to respond.
-*   **Parsing Steps**: Exactly which parser (pypdf, BS4, python-docx) was used for which file.
-*   **Database Queries**: Time taken to retrieve results from Qdrant.
+Logfire records the spans and logs the code emits explicitly (`logfire.span(...)`, `logfire.info(...)`), for example:
+*   **Agent steps**: planner decision, knowledge retrieval, reranking, relevance grading, query rewrite, LLM synthesis, groundedness check.
+*   **Parsing steps**: which parser (pypdf, BS4, python-docx) handled which file, and chunking.
+*   **Gateway events**: `⚡ Gateway Cache Hit` when Portkey served the answer from its cache.
+
+The API calls `logfire.configure(send_to_logfire="if-token-present")`: with `LOGFIRE_TOKEN` set, spans are exported; without it, telemetry stays local and the API still starts. FastAPI auto-instrumentation (`logfire.instrument_fastapi`) is **not** enabled, so per-request latency spans come only from the code's own spans.
 
 ### 2. LangSmith (LLM Orchestration)
 LangSmith is specialized for the "Agentic" part of the project. It records:
-*   **Graph State Transitions**: How the state changed between the Planner and the Retriever.
+*   **Graph State Transitions**: How the state changed from node to node (planner, retriever, grader, rewriter, responder, verifier).
 *   **Prompt Versions**: The exact system instructions sent to Groq.
 *   **Token Usage**: Monitoring the cost and efficiency of LLM calls.
 *   **Chain of Thought**: The reasoning steps the agent took before answering.
@@ -42,5 +44,7 @@ graph TD
 *   **Logfire**: Visit your [Logfire Project](https://logfire.pydantic.dev/).
 *   **LangSmith**: Visit your [LangSmith Project](https://smith.langchain.com/).
 
-> [!TIP]
-> All traces are linked via a common `trace_id`. If you find a bug in the UI, you can find the exact LLM call in LangSmith and the corresponding Logfire span using that ID.
+> [!NOTE]
+> Traces are **not** linked across services. The Streamlit UI and the API configure Logfire separately, and no trace context is propagated between them (`logfire.instrument_requests()` is disabled in `ui/app.py`). LangSmith traces are separate again. To follow one request, match on time and the question text (the UI's `💬 User Chat Interaction` span records the question and session id).
+
+Portkey also logs every gateway call (prompt, model actually used, latency, cache status) in its own dashboard.

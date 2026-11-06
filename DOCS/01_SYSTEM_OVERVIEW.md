@@ -1,15 +1,15 @@
 # 🤖 Enterprise Agentic RAG: System Overview
 
-A production-grade, state-of-the-art RAG system built for speed, scalability, and deep observability. This platform leverages **LangGraph** to handle complex reasoning and a fully local, cloud-agnostic stack for document intelligence.
+A RAG service for technical documents built on **LangGraph**. It retrieves evidence with hybrid search, checks that evidence before answering, cites it, and verifies the answer against it.
 
 ---
 
 ## 🌟 Vision
-Most RAG systems fail because they treat every query the same. Our **Agentic RAG** distinguishes between:
-1.  **Conversational Queries**: "Hi", "Who are you?", "What did I just say?"
-2.  **Technical Queries**: "How do I configure Intel SRIOV on Kubernetes?"
+Many RAG systems treat every query the same. This agent first distinguishes between:
+1.  **Conversational queries**: "Hi", "What did I just ask?" These are answered from conversation memory, with no search.
+2.  **Technical queries**: "How do I limit retries of a Kubernetes Job?" These are answered only from the indexed documents.
 
-By using a **Planner-Retriever-Responder** architecture, we ensure that technical answers are always grounded in "True Data" while conversational interactions remain fluid and fast.
+For technical queries it doesn't trust the first search blindly. A grader drops irrelevant chunks, a rewriter retries once with a better query, and a verifier checks the final answer against the sources. When the documents don't cover a question, the agent says so instead of answering from general knowledge.
 
 ---
 
@@ -17,31 +17,35 @@ By using a **Planner-Retriever-Responder** architecture, we ensure that technica
 ```mermaid
 sequenceDiagram
     participant User
-    participant UI as Streamlit UI
-    participant Agent as Agent Brain (FastAPI)
-    participant Data as Knowledge Base (Qdrant)
+    participant UI as Streamlit UI / MCP client
+    participant API as FastAPI + rag_service
+    participant Agent as LangGraph agent
+    participant Data as Qdrant + FlashRank
 
-    User->>UI: Asks Question
-    UI->>Agent: Request with thread_id
+    User->>UI: Asks question
+    UI->>API: POST /query/stream (or /query) with thread_id
+    API->>API: Rate limit, NeMo Guardrails
+    API->>Agent: Run graph (memory loaded for thread_id)
     Agent->>Agent: Planner decides intent
     alt Technical
-        Agent->>Data: Vector Search
-        Data-->>Agent: Raw Chunks
-        Agent->>Agent: FlashRank Local Reranking
+        Agent->>Data: Hybrid search (dense + BM25, RRF)
+        Data-->>Agent: Top 15 → FlashRank → top 5
+        Agent->>Agent: Grade chunks (rewrite + retry once if none relevant)
+        Agent->>Agent: Answer with [n] citations, then verify
     else Conversational
-        Agent->>Agent: Recall Memory
+        Agent->>Agent: Answer from conversation memory
     end
-    Agent->>User: Synthesized Answer + Sources
+    Agent-->>UI: Steps, answer tokens, sources, grounded verdict
 ```
 
 ---
 
 ## 📂 Project Organization
-*   **`app/`**: The core Python package containing the Agent, Pipelines, and Services.
-*   **`ui/`**: A premium Streamlit interface designed for source transparency.
-*   **`DATA/`**: The ground-truth documentation used for ingestion.
-*   **`DOCS/`**: This documentation suite.
-*   **`commands.md`**: The master execution guide for developers.
+*   **`app/`**: the API (`main.py`), the shared service layer (`services/rag_service.py`), the agent (`agents/`), retrieval, ingestion, guardrails, gateway and the MCP server.
+*   **`ui/`**: the Streamlit chat and upload interface.
+*   **`evals/`**: the golden dataset, RAGAS pipeline and retrieval benchmark.
+*   **`DATA/`**: the sample corpus (`true_data` answers, `noisy_data` distractors).
+*   **`DOCS/`**: this documentation suite. Commands are in the [README](../README.md).
 
 ---
 
@@ -50,3 +54,4 @@ sequenceDiagram
 2.  **Intelligence**: [03_NODE_INTELLIGENCE.md](03_NODE_INTELLIGENCE.md)
 3.  **Observability**: [04_TRACING_AND_OBSERVABILITY.md](04_TRACING_AND_OBSERVABILITY.md)
 4.  **Environment Variables**: [05_ENVIRONMENT_VARIABLES.md](05_ENVIRONMENT_VARIABLES.md)
+5.  **Architecture diagrams**: [../ARCHITECTURE.md](../ARCHITECTURE.md)

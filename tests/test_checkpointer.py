@@ -98,10 +98,20 @@ def test_sqlite_backend_creates_folder_and_tables(sqlite_env):
         handle.saver.conn.execute("SELECT 1")
 
 
-def test_sqlite_default_path(monkeypatch):
+def test_sqlite_default_path_is_under_the_project_root_not_the_cwd(monkeypatch, tmp_path):
     monkeypatch.delenv("SQLITE_CHECKPOINT_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)  # e.g. Claude Desktop starting the MCP server elsewhere
 
-    assert cp.sqlite_checkpoint_path().as_posix() == "state/checkpoints.sqlite"
+    path = cp.sqlite_checkpoint_path()
+
+    assert path == cp.PROJECT_ROOT / "state" / "checkpoints.sqlite"
+    assert (cp.PROJECT_ROOT / "app" / "agents" / "checkpointer.py").is_file()
+
+
+def test_sqlite_explicit_path_is_used_as_given(monkeypatch):
+    monkeypatch.setenv("SQLITE_CHECKPOINT_PATH", "relative/memory.sqlite")
+
+    assert cp.sqlite_checkpoint_path().as_posix() == "relative/memory.sqlite"
 
 
 # ── postgres (mocked) ─────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # 🔑 Environment Variables & Configuration
 
-The project uses a `.env` file for local development. All configuration is managed via **Pydantic Settings** in `app/config.py` for strict type safety. Copy `.env.example` to `.env` and fill in your values before running anything.
+The project uses a `.env` file for local development, loaded with `python-dotenv`. Provider keys and Qdrant settings are read in `app/config.py` (a plain `Settings` class over `os.getenv`); feature switches are read where they are used (`app/agents/graph.py`, `app/agents/checkpointer.py`, `app/rate_limit.py`, `app/services/retrieval/schema.py`). Copy `.env.example` to `.env` and fill in your values before running anything. `.env.example` lists every variable the code reads.
 
 ---
 
@@ -8,8 +8,8 @@ The project uses a `.env` file for local development. All configuration is manag
 
 | Variable | Description | Example |
 | :--- | :--- | :--- |
-| `GROQ_API_KEY` | Primary key for Groq LLM calls (Planner + Responder nodes) | `gsk_...` |
-| `GROQ_FALLBACK_API_KEY` | Second Groq key used by Portkey as the fallback target; can be the same as primary | `gsk_...` |
+| `GROQ_API_KEY` | **Required.** Used directly (not through Portkey) by NeMo Guardrails (`llama-3.1-8b-instant`), and by the RAGAS judge when `JUDGE_GROQ` is unset. Startup fails if it is empty (guardrails are built at startup; a dummy value is enough for `/health`). | `gsk_...` |
+| `GROQ_FALLBACK_API_KEY` | Read into `settings` but **not used by the code**. The agent's Groq keys live in the Portkey dashboard as the `rag` (primary) and `brag` (fallback) integrations. Kept because the deploy workflow mounts it. | `gsk_...` |
 
 ---
 
@@ -17,7 +17,7 @@ The project uses a `.env` file for local development. All configuration is manag
 
 | Variable | Description | Example |
 | :--- | :--- | :--- |
-| `PORTKEY_API_KEY` | API key for Portkey — enables routing, fallback, caching, and observability across all LLM calls | `pk-...` |
+| `PORTKEY_API_KEY` | API key for Portkey. Every agent LLM call (planner, grader, rewriter, responder, verifier) goes through the gateway, which routes to `@rag/llama-3.3-70b-versatile` with fallback to `@brag/llama-3.1-8b-instant` (slugs in `app/config.py`). | `pk-...` |
 
 ---
 
@@ -37,7 +37,9 @@ The project uses a `.env` file for local development. All configuration is manag
 | `QDRANT_CLUSTER_ENDPOINT` | Full URL of your Qdrant Cloud cluster | `https://your-cluster.cloud.qdrant.io:6333` |
 | `QDRANT_COLLECTION` | Collection name (default `enterprise_rag`; empty also means default). Use a **new name when the vector schema changes**, e.g. `enterprise_rag_v2` for the hybrid dense + bm25 schema, so an older deployment keeps working on the old collection while you re-ingest into the new one. | `enterprise_rag_v2` |
 | `RETRIEVAL_MODE` | `hybrid` (default): dense + BM25 prefetch fused with Qdrant RRF, then FlashRank. `dense`: dense-only search, then FlashRank. Any other value fails at API startup. Both modes use the same collection. | `hybrid` |
-| `FASTEMBED_CACHE_PATH` | Optional. Where fastembed caches the `Qdrant/bm25` model (default: a temp directory) | `/tmp/fastembed` |
+| `FASTEMBED_CACHE_PATH` | Optional. Where fastembed caches the `Qdrant/bm25` model (default: a temp directory). Read by fastembed itself; the Docker image sets it to `/opt/models`. | `/tmp/fastembed` |
+| `FLASHRANK_CACHE_DIR` | Optional. Where FlashRank keeps its ONNX reranker model (default `/tmp/flashrank`). The Docker image sets it to `/opt/models`, where the model is pre-downloaded. | `/tmp/flashrank` |
+| `PROCESSED_DATA_DIR` | Optional. Folder the MCP tool `list_indexed_documents` reads (default `<project root>/processed_data`). Ingestion always writes to `processed_data/` under the current working directory. | `./processed_data` |
 
 ---
 
@@ -47,9 +49,9 @@ The project uses a `.env` file for local development. All configuration is manag
 | :--- | :--- | :--- |
 | `LOGFIRE_TOKEN` | Pydantic Logfire token — traces every API call, parsing step, and retrieval span | `logfire_...` |
 | `LANGSMITH_API_KEY` | LangSmith token — records LangGraph node transitions, prompts, and token usage | `lsv2_...` |
-| `LANGSMITH_PROJECT` | LangSmith project name to group traces | `enterprise_rag` |
-| `LANGSMITH_TRACING` | Enable/disable LangSmith tracing | `true` |
-| `LANGSMITH_ENDPOINT` | LangSmith API endpoint | `https://api.smith.langchain.com` |
+| `LANGSMITH_PROJECT` | LangSmith project name to group traces (default `rag_scale_test`) | `enterprise_rag` |
+| `LANGSMITH_TRACING` | Enable/disable LangSmith tracing (default `true`; `app/config.py` copies it to `LANGCHAIN_TRACING_V2`) | `true` |
+| `LANGSMITH_ENDPOINT` | LangSmith API endpoint (default shown) | `https://api.smith.langchain.com` |
 
 ---
 
@@ -61,6 +63,14 @@ The project uses a `.env` file for local development. All configuration is manag
 
 ---
 
+## 🧠 Agent
+
+| Variable | Description | Example |
+| :--- | :--- | :--- |
+| `ENABLE_SELF_CORRECTION` | Default `true`: grader + one rewrite-and-retry + verifier (+2 LLM calls per technical question, more on a retry). `false`, `0`, `no` or `off` builds the original linear graph `planner → retriever → responder`. | `true` |
+
+---
+
 ## 💾 Conversation Memory (LangGraph checkpointer)
 
 The checkpointer stores the graph state per `thread_id` after every node, so a follow-up question on the same thread sees the earlier turns. Code: `app/agents/checkpointer.py`.
@@ -68,7 +78,7 @@ The checkpointer stores the graph state per `thread_id` after every node, so a f
 | Variable | Description | Example |
 | :--- | :--- | :--- |
 | `CHECKPOINTER` | `sqlite` (default): local file, survives API restarts on one machine. `memory`: in-process only, lost on restart (tests use this). `postgres`: shared database, required for persistent memory on Cloud Run. Any other value fails at API startup. | `sqlite` |
-| `SQLITE_CHECKPOINT_PATH` | SQLite file for `CHECKPOINTER=sqlite`. The folder is created on startup and `/state/` is git- and docker-ignored. Default `./state/checkpoints.sqlite` (not `./data/`: on macOS/Windows that is the same folder as the `DATA/` corpus). | `./state/checkpoints.sqlite` |
+| `SQLITE_CHECKPOINT_PATH` | SQLite file for `CHECKPOINTER=sqlite`. The folder is created on startup and `/state/` is git- and docker-ignored. Unset: `<project root>/state/checkpoints.sqlite`, independent of the working directory (so an MCP server started by Claude Desktop uses the same file). A relative value you set is resolved from the working directory. Not `./data/`: on macOS/Windows that is the same folder as the `DATA/` corpus. | `/var/lib/rag/checkpoints.sqlite` |
 | `DATABASE_URL` | Postgres connection string for `CHECKPOINTER=postgres`. Tables are created on startup (`PostgresSaver.setup()`, idempotent). **A secret**: on Cloud Run it comes from Secret Manager. | `postgresql://user:pass@ep-x.neon.tech/rag?sslmode=require` |
 
 `POST /threads/{thread_id}/reset` deletes all checkpoints of one thread (the UI's **Clear History & Memory** button calls it).
@@ -95,7 +105,8 @@ Per-client-IP limits on the endpoints that spend LLM / embedding budget. Code: `
 
 | Variable | Description | Example |
 | :--- | :--- | :--- |
-| `BACKEND_URL` | URL the Streamlit UI uses to reach the FastAPI backend | `http://localhost:8000` |
+| `BACKEND_URL` | URL the Streamlit UI uses to reach the FastAPI backend (default `http://localhost:8000`, no trailing slash) | `http://localhost:8000` |
+| `PORT` | Port uvicorn listens on inside the Docker image (default `8080`; Cloud Run sets it) | `8080` |
 
 ---
 

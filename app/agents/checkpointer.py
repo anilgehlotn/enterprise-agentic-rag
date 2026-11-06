@@ -6,7 +6,7 @@ latest checkpoint, which is how follow-up questions see earlier turns.
 
 CHECKPOINTER selects the backend:
   memory    in-process dict (MemorySaver). Lost on restart; fine for tests.
-  sqlite    (default) a local file, SQLITE_CHECKPOINT_PATH (default ./state/checkpoints.sqlite).
+  sqlite    (default) a local file, SQLITE_CHECKPOINT_PATH (default <project root>/state/checkpoints.sqlite).
             Survives restarts on one machine. NOT for Cloud Run: the container disk is
             in-memory, wiped on every new instance, and not shared between instances.
   postgres  DATABASE_URL (Neon / Supabase / Cloud SQL). Shared by every Cloud Run
@@ -31,6 +31,9 @@ DEFAULT_BACKEND = "sqlite"
 # Not ./data/: on case-insensitive filesystems (macOS, Windows) that IS the DATA/ corpus
 # folder, so the checkpoint DB would land among the documents being ingested.
 DEFAULT_SQLITE_PATH = "./state/checkpoints.sqlite"
+# The default is resolved from the project root, not the working directory: MCP clients
+# such as Claude Desktop start the server from an arbitrary (possibly read-only) folder.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Small pool: max 2 Cloud Run instances x a handful of concurrent requests each.
 # Free Neon / Supabase tiers allow only a few dozen connections in total.
@@ -57,7 +60,11 @@ def resolve_checkpointer_backend(value: str | None = None) -> str:
 
 
 def sqlite_checkpoint_path() -> Path:
-    return Path(os.getenv("SQLITE_CHECKPOINT_PATH") or DEFAULT_SQLITE_PATH).expanduser()
+    """SQLITE_CHECKPOINT_PATH as given (relative = from the working directory), else <project root>/state/."""
+    configured = os.getenv("SQLITE_CHECKPOINT_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return PROJECT_ROOT / DEFAULT_SQLITE_PATH
 
 
 def _memory() -> CheckpointerHandle:

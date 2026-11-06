@@ -968,6 +968,8 @@ This isolation means a heavy eval run can never rate-limit your production syste
 
 ## The 6 Experiments — What We Test and Why
 
+> These are the teaching experiments in `notebooks/03_evals.ipynb`. The project's own eval run on the Kubernetes golden dataset is described in [11_EVALS_PIPELINE.md](11_EVALS_PIPELINE.md).
+
 Each experiment uses a **different everyday domain** so the scenarios are intuitive and relatable. In production we'd use Kubernetes data — but in a learning notebook, using domains everyone knows (e-commerce, travel, cooking) makes it easier to spot what's right and wrong.
 
 | Exp | Domain | Metric | What the bad sample does |
@@ -1042,5 +1044,5 @@ tool correctness   → manual Jaccard — no DeepEval ToolCorrectnessMetric (req
 - `notebooks/03_evals.ipynb` — all 6 experiments runnable end-to-end
 - `app/agents/nodes/planner.py` — the node whose tool routing Tool Correctness validates
 - `app/agents/nodes/responder.py` — the node Faithfulness and Answer metrics validate
-- `DOCS/03_NODE_INTELLIGENCE.md` — how the planner/retriever/responder nodes work
+- `DOCS/03_NODE_INTELLIGENCE.md` — how the planner, retriever, grader, rewriter, responder and verifier nodes work
 - `DOCS/07_FLASHRANK_RERANKING.md` — the reranking step that Context Precision validates
