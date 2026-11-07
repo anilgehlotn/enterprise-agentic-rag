@@ -16,6 +16,11 @@ os.environ["LANGCHAIN_TRACING_V2"] = "false"
 # The app defaults to a SQLite checkpointer at ./data/checkpoints.sqlite. Tests use the
 # in-process one unless a test opts into sqlite with a temp file (monkeypatch.setenv).
 os.environ["CHECKPOINTER"] = "memory"
+# Query analytics would otherwise write to <project root>/state/analytics.sqlite. Tests that
+# exercise it opt in with the `analytics_db` fixture (temporary SQLite file).
+os.environ["ANALYTICS_ENABLED"] = "false"
+os.environ.pop("ANALYTICS_API_KEY", None)
+os.environ.pop("ANALYTICS_DATABASE_URL", None)
 
 
 if "logfire" not in sys.modules:
@@ -42,6 +47,9 @@ def _fresh_process_state():
 
 
 def _reset_singletons():
+    analytics = sys.modules.get("app.analytics")
+    if analytics is not None:
+        analytics.shutdown_analytics()
     rate_limit = sys.modules.get("app.rate_limit")
     if rate_limit is not None:
         rate_limit.limiter.reset()
@@ -76,3 +84,17 @@ def api_app(monkeypatch):
     state.main = importlib.import_module("app.main")
     yield state
     sys.modules.pop("app.main", None)
+
+
+@pytest.fixture
+def analytics_db(tmp_path, monkeypatch):
+    """Analytics on, backed by a fresh temporary SQLite file. Yields the database URL."""
+    from app import analytics
+
+    analytics.shutdown_analytics()
+    url = f"sqlite:///{tmp_path / 'analytics.sqlite'}"
+    monkeypatch.setenv("ANALYTICS_ENABLED", "true")
+    monkeypatch.setenv("ANALYTICS_STORE_QUESTIONS", "true")
+    monkeypatch.setenv("ANALYTICS_DATABASE_URL", url)
+    yield url
+    analytics.shutdown_analytics()

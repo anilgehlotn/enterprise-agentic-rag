@@ -20,7 +20,8 @@ You index PDF, HTML, TXT, DOCX and PPTX files (from the CLI or by uploading them
 - **MCP server**: three tools for MCP clients (ask, search, list documents). None of them uploads, changes or deletes documents.
 - **Streaming**: `POST /query/stream` sends Server-Sent Events: plan steps as each graph node finishes, answer tokens as the LLM generates them, then the sources and a final `done` event.
 - **Persistent conversation memory**: a LangGraph checkpointer stores each conversation by `thread_id`. It uses SQLite locally and can use Postgres on Cloud Run; `POST /threads/{thread_id}/reset` clears one conversation.
-- **Rate limiting**: per-client-IP limits on `/query`, `/query/stream` and `/documents` (429 with `Retry-After`). `/health` is never limited.
+- **Rate limiting**: per-client-IP limits on `/query`, `/query/stream`, `/documents`, `/feedback` and `/analytics` (429 with `Retry-After`). `/health` is never limited.
+- **Answer feedback and SQL analytics**: 👍/👎 under every answer (`POST /feedback`), and every question logged to `query_log` (SQLite locally, Postgres on Cloud Run) without answers or source text. `GET /analytics` (key-protected) reports volume, intents, grounded rate, rewrite rate, satisfaction, frequent questions and latency from hand-written SQL (GROUP BY, HAVING, LEFT JOIN, CASE), with plain SQL migrations. See [DOCS/14](DOCS/14_ANALYTICS.md).
 - **CI/CD**: GitHub Actions runs ruff, pytest with a coverage gate, and a Docker build + `/health` smoke test. A manual workflow deploys to Cloud Run with Workload Identity Federation (no JSON keys) and Secret Manager.
 - **Evaluation**: a RAGAS suite (5 metrics plus tool correctness) and guardrail precision/recall over a golden dataset, plus a retrieval benchmark comparing dense, hybrid and reranked retrieval.
 
@@ -144,12 +145,14 @@ python -m pytest tests -q --cov=app
 | `GET` | `/` | Liveness message |
 | `GET` | `/health` | Readiness check for Docker and Cloud Run. Never rate limited. |
 | `GET` | `/graph` | PNG of the agent graph (rendered through the mermaid.ink web API, so it needs network access) |
-| `POST` | `/query` | Ask a question: `{"q": "...", "thread_id": "..."}` → `question, answer, thought_process, status, sources, grounded` |
+| `POST` | `/query` | Ask a question: `{"q": "...", "thread_id": "..."}` → `question, answer, thought_process, status, sources, grounded, query_id` |
 | `POST` | `/query/stream` | Same body and pipeline as `/query`, streamed as SSE events `step`, `token`, `sources`, `done` (or `error`) |
 | `POST` | `/documents` | Upload and index files (multipart `files`; PDF/HTML/TXT/DOCX/PPTX, 25 MB per file) |
 | `POST` | `/threads/{thread_id}/reset` | Delete a conversation's memory |
+| `POST` | `/feedback` | Rate an answer: `{"query_id": "...", "rating": 1 or -1, "comment": "..."}` → 201 (a second vote replaces the first); 404 for an unknown `query_id` |
+| `GET` | `/analytics?days=7` | Query analytics for 1–90 days. Needs `X-API-Key: $ANALYTICS_API_KEY`; returns 404 when no key is configured |
 
-`q` is 1–4,000 characters. `/query` and `/query/stream` share one rate-limit budget (`RATE_LIMIT_QUERY`, default `20/minute`); `/documents` has its own (`RATE_LIMIT_UPLOAD`, default `5/minute`). FastAPI's interactive docs are at `/docs`.
+`q` is 1–4,000 characters. `/query` and `/query/stream` share one rate-limit budget (`RATE_LIMIT_QUERY`, default `20/minute`); `/documents` has its own (`RATE_LIMIT_UPLOAD`, default `5/minute`); `/feedback` and `/analytics` each have their own budget with the `RATE_LIMIT_QUERY` limit. FastAPI's interactive docs are at `/docs`.
 
 ## MCP server
 
@@ -202,9 +205,11 @@ app/
   ingestion/              Loaders (PDF/HTML/TXT/DOCX/PPTX), chunker, processor (CLI + uploads)
   guardrails/             NeMo Colang rules and the guard() gate
   gateway/                Portkey config, native and LangChain clients, cache-status helper
+  analytics/              Query log + feedback: SQL migrations, background writer, hand-written analytics SQL
   rate_limit.py           Sliding-window per-IP limiter
   mcp_server.py           MCP server (3 tools)
-ui/app.py                 Streamlit chat (SSE streaming with /query fallback) and upload dialog
+ui/app.py                 Streamlit chat (SSE streaming with /query fallback), upload dialog, 👍/👎 feedback
+ui/pages/analytics.py     Streamlit analytics page (GET /analytics)
 evals/                    Golden dataset, RAGAS pipeline + dashboard, retrieval benchmark, chunking experiment
 tests/                    Unit and API tests (no keys, no network)
 notebooks/                Guardrails, gateway and evals experiments
@@ -248,5 +253,6 @@ Added in this repository since the import:
 | [11 Evals pipeline](DOCS/11_EVALS_PIPELINE.md) | How this project's eval run works |
 | [12 Deployment and demo](DOCS/12_DEPLOYMENT_AND_DEMO.md) | CI, Docker, Cloud Run, Postgres memory, rate limits |
 | [13 MCP server](DOCS/13_MCP_SERVER.md) | MCP tools and client setup |
+| [14 Analytics](DOCS/14_ANALYTICS.md) | Query log and feedback schema, every analytics SQL query, privacy, sqlite3 CLI |
 | [Project guide](DOCS/PROJECT_GUIDE.md) | Beginner-friendly walkthrough and interview prep |
 | [CLAUDE.md](CLAUDE.md) | Conventions for AI-assisted development |

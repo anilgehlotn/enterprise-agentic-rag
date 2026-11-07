@@ -69,6 +69,7 @@ Example output (`structuredContent`):
 
 - `[n]` in the answer refers to `sources[n-1]`.
 - `grounded`: `true` = verified against sources, `false` = not fully supported, `null` = not verified (conversational, nothing found, or unclear).
+- `query_id`: the answer's id in the query analytics (logged with source `mcp`, [14 Analytics](14_ANALYTICS.md)); `null` when `ANALYTICS_ENABLED=false`.
 - Off-topic or jailbreak prompts return normally with `"status": "Blocked by guardrails."` and the guardrail's reply as `answer`.
 
 ### `search_knowledge_base`

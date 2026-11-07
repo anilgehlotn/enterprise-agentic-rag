@@ -21,3 +21,6 @@ python-multipart==0.0.33
 # the client itself is mocked. Pinned to match requirements-prod.txt. fastembed is NOT
 # needed: tests mock the sparse embedder.
 qdrant-client==1.17.1
+# Query analytics (app/analytics): tests run the real SQL against temporary SQLite files.
+# Pinned to match requirements-prod.txt. psycopg (Postgres driver) is NOT needed here.
+sqlalchemy==2.0.49

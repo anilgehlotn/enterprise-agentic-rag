@@ -142,6 +142,7 @@ def test_answer_question_runs_guardrails_then_agent(monkeypatch, guardrails):
             }
         ],
         "grounded": True,
+        "query_id": None,  # analytics is off in tests unless a test opts in
     }
 
 
@@ -159,6 +160,7 @@ def test_answer_question_blocked_by_guardrails_skips_agent(monkeypatch, guardrai
         "status": "Blocked by guardrails.",
         "sources": [],
         "grounded": None,
+        "query_id": None,
     }
 
 
@@ -174,6 +176,7 @@ def test_answer_question_agent_error_returns_error_shape(monkeypatch, guardrails
         "status": "error",
         "sources": [],
         "grounded": None,
+        "query_id": None,
     }
 
 

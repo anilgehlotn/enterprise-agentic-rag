@@ -227,6 +227,8 @@ GitHub → repository → **Settings → Secrets and variables → Actions → V
 | `AR_REPOSITORY` | `enterprise-rag` |
 | `CLOUD_RUN_RUNTIME_SA` | `rag-runtime@<project-id>.iam.gserviceaccount.com` (recommended; if unset, Cloud Run uses the default compute SA) |
 | `CHECKPOINTER` | Optional. `postgres` for persistent conversation memory (needs the `DATABASE_URL` secret, see section 8). Unset = `sqlite`, which on Cloud Run is per instance and lost on scale-down. |
+| `ANALYTICS_ENDPOINT` | Optional. `enabled` mounts the `ANALYTICS_API_KEY` secret, which turns on `GET /analytics` (section 8.6). Unset = the endpoint returns 404. |
+| `ANALYTICS_ENABLED` / `ANALYTICS_STORE_QUESTIONS` | Optional. Default `true` / `true`. Set `ANALYTICS_STORE_QUESTIONS=false` to log without question text. |
 
 Or with the GitHub CLI:
 
@@ -381,4 +383,29 @@ curl -N -X POST "$URL/query/stream" -H 'Content-Type: application/json' \
 
 The deploy sets `TRUST_PROXY_HEADERS=true`: requests reach the container through Google's front end, so the TCP peer is Google's proxy, not the user, and every user would otherwise share one budget. The image starts uvicorn with `--no-proxy-headers`, so uvicorn never rewrites the client address itself and `TRUST_PROXY_HEADERS` is the only switch. The app uses the **rightmost** `X-Forwarded-For` entry, the address Google's front end appended; entries to its left are whatever the client sent and can be forged. If you later put an external HTTPS load balancer in front of Cloud Run, the rightmost entry becomes the load balancer's address: check the header in the logs and adjust `client_ip()` in `app/rate_limit.py`.
 
-Defaults: `RATE_LIMIT_QUERY=20/minute` (shared by `/query` and `/query/stream`) and `RATE_LIMIT_UPLOAD=5/minute`, per client IP. Counters are in memory **per instance**, so with `--max-instances=2` a client can get up to 2× the limit; that is acceptable here and keeps Redis out of the stack. The limit protects the LLM budget per client; keep the provider-side budget alerts from section 6 as the global backstop.
+Defaults: `RATE_LIMIT_QUERY=20/minute` (shared by `/query` and `/query/stream`; `/feedback` and `/analytics` use the same limit with their own budgets) and `RATE_LIMIT_UPLOAD=5/minute`, per client IP. Counters are in memory **per instance**, so with `--max-instances=2` a client can get up to 2× the limit; that is acceptable here and keeps Redis out of the stack. The limit protects the LLM budget per client; keep the provider-side budget alerts from section 6 as the global backstop.
+
+### 8.6 Query analytics and feedback on Postgres
+
+Analytics ([14 Analytics](14_ANALYTICS.md)) stores one `query_log` row per question and one `feedback` row per rated answer. Like the checkpointer, its default SQLite file is per instance on Cloud Run and lost on scale-down, so use Postgres there:
+
+- With `vars.CHECKPOINTER == 'postgres'` the deploy workflow also mounts `ANALYTICS_DATABASE_URL=DATABASE_URL:latest`: the analytics tables (`query_log`, `feedback`, `schema_migrations`) go into the same database as the checkpoint tables. The names don't collide. To use a separate database instead, create an `ANALYTICS_DATABASE_URL` secret and change that line of `.github/workflows/deploy-cloud-run.yml`.
+- `postgresql://` URLs are used with psycopg 3 (already in the image for the checkpointer); `?sslmode=require` is kept.
+- The SQL migrations in `app/analytics/migrations/` run at startup and are recorded in `schema_migrations`; they are idempotent, so two instances starting together are safe.
+- If the analytics database is unreachable, the service **still starts and answers**: the error is logged, `query_id` is still returned, rows are dropped, and `/feedback` / `/analytics` return 503. Unlike the checkpointer, analytics is not allowed to block a deploy.
+
+To turn on `GET /analytics`, store a key and tell the workflow to mount it:
+
+```bash
+gcloud secrets create ANALYTICS_API_KEY --replication-policy=automatic
+python3 -c "import secrets; print(secrets.token_urlsafe(32), end='')" | gcloud secrets versions add ANALYTICS_API_KEY --data-file=-
+gcloud secrets add-iam-policy-binding ANALYTICS_API_KEY \
+  --member="serviceAccount:$RUNTIME_SA_EMAIL" --role=roles/secretmanager.secretAccessor
+gh variable set ANALYTICS_ENDPOINT --body enabled
+
+# After the next deploy:
+curl -H "X-API-Key: $(gcloud secrets versions access latest --secret=ANALYTICS_API_KEY)" "$URL/analytics?days=7"
+```
+
+The Streamlit page **Analytics** (`ui/pages/analytics.py`) asks for the same key.
+

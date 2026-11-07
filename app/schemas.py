@@ -28,3 +28,6 @@ class QueryResponse(BaseModel):
     # Self-RAG verifier verdict: True = supported by sources, False = not fully
     # supported, None = not verified (conversational, no documents, blocked, unclear).
     grounded: bool | None = None
+    # Id of this answer's query_log row, for POST /feedback. None when analytics is off.
+    # Added after the original six fields; additive, so existing clients are unaffected.
+    query_id: str | None = None

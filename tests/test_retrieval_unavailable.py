@@ -150,7 +150,7 @@ def test_query_returns_normal_shape_with_unavailable_status(api, monkeypatch, qd
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"question", "answer", "thought_process", "status", "sources", "grounded"}
+    assert set(body) == {"question", "answer", "thought_process", "status", "sources", "grounded", "query_id"}
     assert body["question"] == "What does backoffLimit do?"
     assert body["answer"] == KNOWLEDGE_BASE_UNAVAILABLE_ANSWER
     assert body["status"] == KNOWLEDGE_BASE_UNAVAILABLE_STATUS
@@ -209,7 +209,7 @@ def test_mcp_ask_reports_unavailable_status_as_a_normal_answer(monkeypatch):
     monkeypatch.setattr(
         rag_service,
         "answer_question",
-        lambda question, thread_id: {
+        lambda question, thread_id, source="mcp": {
             "question": question,
             "answer": KNOWLEDGE_BASE_UNAVAILABLE_ANSWER,
             "thought_process": ["Intent: Technical", "Retrieval attempt 1/2 (hybrid): knowledge base unavailable"],

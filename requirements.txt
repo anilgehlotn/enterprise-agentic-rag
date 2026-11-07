@@ -32,6 +32,7 @@ langgraph-checkpoint-sqlite==3.1.3    # Conversation memory in a local SQLite fi
 langgraph-checkpoint-postgres==3.2.0  # Conversation memory in Postgres (CHECKPOINTER=postgres, Cloud Run)
 psycopg[binary]==3.3.8                # Postgres driver for the postgres checkpointer
 psycopg-pool==3.3.3                   # Connection pool for the postgres checkpointer
+sqlalchemy==2.0.49                    # Query analytics: connection layer for hand-written SQL (SQLite / Postgres)
 langchain-groq              # Integration for lightning-fast Llama 3.3 models
 langchain-google-vertexai   # Required shim for NeMo Guardrails internal import (no GCP credentials needed)
 langchain-community         # Community-contributed tools and loaders
