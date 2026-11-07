@@ -21,9 +21,10 @@ You index PDF, HTML, TXT, DOCX and PPTX files (from the CLI or by uploading them
 - **Streaming**: `POST /query/stream` sends Server-Sent Events: plan steps as each graph node finishes, answer tokens as the LLM generates them, then the sources and a final `done` event.
 - **Persistent conversation memory**: a LangGraph checkpointer stores each conversation by `thread_id`. It uses SQLite locally and can use Postgres on Cloud Run; `POST /threads/{thread_id}/reset` clears one conversation.
 - **Rate limiting**: per-client-IP limits on `/query`, `/query/stream`, `/documents`, `/feedback` and `/analytics` (429 with `Retry-After`). `/health` is never limited.
-- **Answer feedback and SQL analytics**: 👍/👎 under every answer (`POST /feedback`), and every question logged to `query_log` (SQLite locally, Postgres on Cloud Run) without answers or source text. `GET /analytics` (key-protected) reports volume, intents, grounded rate, rewrite rate, satisfaction, frequent questions and latency from hand-written SQL (GROUP BY, HAVING, LEFT JOIN, CASE), with plain SQL migrations. See [DOCS/14](DOCS/14_ANALYTICS.md).
+- **Configurable chunking**: four strategies for ingestion (`paragraph` default, `fixed`, `recursive`, `semantic`) set with `CHUNKING_STRATEGY` / `CHUNK_SIZE` / `CHUNK_OVERLAP`. Each chunk's Qdrant payload records how it was chunked. A chunking experiment compares 18 configurations (see [Evaluation](#evaluation)).
+- **Answer feedback and SQL analytics**: 👍/👎 under every answer (`POST /feedback`), and every question logged to `query_log` (SQLite locally, Postgres on Cloud Run) without answers or source text. `GET /analytics` (key-protected with `X-API-Key`) reports volume, intents, grounded rate, rewrite rate, satisfaction, frequent questions and latency from hand-written SQL (GROUP BY, HAVING, LEFT JOIN, CASE), with plain SQL migrations. A Streamlit analytics page (`ui/pages/analytics.py`) shows the same report. See [DOCS/14](DOCS/14_ANALYTICS.md).
 - **CI/CD**: GitHub Actions runs ruff, pytest with a coverage gate, and a Docker build + `/health` smoke test. A manual workflow deploys to Cloud Run with Workload Identity Federation (no JSON keys) and Secret Manager.
-- **Evaluation**: a RAGAS suite (5 metrics plus tool correctness) and guardrail precision/recall over a golden dataset, plus a retrieval benchmark comparing dense, hybrid and reranked retrieval.
+- **Evaluation**: a RAGAS suite (5 metrics plus tool correctness) and guardrail precision/recall over a golden dataset, a retrieval benchmark comparing dense, hybrid and reranked retrieval, and a chunking experiment.
 
 ## Architecture
 
@@ -138,6 +139,25 @@ ruff check . && ruff format --check .
 python -m pytest tests -q --cov=app
 ```
 
+## Configuration
+
+All settings come from environment variables (`.env` locally, Secret Manager on Cloud Run). The full list with defaults is in [DOCS/05_ENVIRONMENT_VARIABLES.md](DOCS/05_ENVIRONMENT_VARIABLES.md) and [.env.example](.env.example). The ones most often changed:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `QDRANT_COLLECTION` | `enterprise_rag` | Collection to index into and search |
+| `RETRIEVAL_MODE` | `hybrid` | `hybrid` (dense + BM25 with RRF) or `dense` |
+| `CHUNKING_STRATEGY` | `paragraph` | `paragraph`, `fixed`, `recursive` or `semantic`. Invalid values fail at API startup and before `processor --wipe` touches Qdrant. Re-ingest after changing it. |
+| `CHUNK_SIZE` | `1500` | Maximum chunk length in characters |
+| `CHUNK_OVERLAP` | `0` | Characters repeated between chunks; must be smaller than `CHUNK_SIZE`. Only `fixed` and `recursive` support it. |
+| `ENABLE_SELF_CORRECTION` | `true` | `false` runs the linear planner → retriever → responder graph |
+| `CHECKPOINTER` | `sqlite` | Conversation memory: `memory`, `sqlite` or `postgres` |
+| `RATE_LIMIT_QUERY` / `RATE_LIMIT_UPLOAD` | `20/minute` / `5/minute` | Per-IP limits |
+| `ANALYTICS_ENABLED` | `true` | Log one row per question and accept `POST /feedback`; `false` logs nothing and `query_id` is `null` |
+| `ANALYTICS_DATABASE_URL` | SQLite file `state/analytics.sqlite` | SQLAlchemy URL of the analytics database (Postgres on Cloud Run) |
+| `ANALYTICS_STORE_QUESTIONS` | `true` | `false` stores `NULL` instead of the question text |
+| `ANALYTICS_API_KEY` | empty | Key for `GET /analytics`; empty means the endpoint returns 404 |
+
 ## API endpoints
 
 | Method | Path | Purpose |
@@ -145,9 +165,9 @@ python -m pytest tests -q --cov=app
 | `GET` | `/` | Liveness message |
 | `GET` | `/health` | Readiness check for Docker and Cloud Run. Never rate limited. |
 | `GET` | `/graph` | PNG of the agent graph (rendered through the mermaid.ink web API, so it needs network access) |
-| `POST` | `/query` | Ask a question: `{"q": "...", "thread_id": "..."}` → `question, answer, thought_process, status, sources, grounded, query_id` |
+| `POST` | `/query` | Ask a question: `{"q": "...", "thread_id": "..."}` → `question, answer, thought_process, status, sources, grounded, query_id` (`query_id` is `null` when analytics is off) |
 | `POST` | `/query/stream` | Same body and pipeline as `/query`, streamed as SSE events `step`, `token`, `sources`, `done` (or `error`) |
-| `POST` | `/documents` | Upload and index files (multipart `files`; PDF/HTML/TXT/DOCX/PPTX, 25 MB per file) |
+| `POST` | `/documents` | Upload and index files (multipart `files`; PDF/HTML/TXT/DOCX/PPTX, 25 MB per file) → 201 with `filename, chunks_indexed` per file |
 | `POST` | `/threads/{thread_id}/reset` | Delete a conversation's memory |
 | `POST` | `/feedback` | Rate an answer: `{"query_id": "...", "rating": 1 or -1, "comment": "..."}` → 201 (a second vote replaces the first); 404 for an unknown `query_id` |
 | `GET` | `/analytics?days=7` | Query analytics for 1–90 days. Needs `X-API-Key: $ANALYTICS_API_KEY`; returns 404 when no key is configured |
@@ -165,18 +185,56 @@ Tools: `ask_knowledge_base` (guardrails + the full agent; returns a cited answer
 
 ## Evaluation
 
-**RAGAS suite** (`evals/`). A golden dataset of 15 questions built from the `DATA/true_data` documents, plus 6 guardrail test inputs, run against the live API in a 3-tab Streamlit app:
+All three evaluations use the golden dataset in [`evals/golden_dataset.json`](evals/golden_dataset.json): 15 questions built from the `DATA/true_data` documents and 6 guardrail test inputs. With 15 questions, one question moves hit rate by 6.7 points, so small differences are noise.
+
+| Evaluation | What it measures | Results |
+|---|---|---|
+| Chunking experiment | Retrieval quality of 18 chunking configurations | [Published](evals/results/chunking_experiment.md) (2026-11-07 run) |
+| Retrieval benchmark | Dense vs hybrid retrieval, with and without FlashRank | Not published yet |
+| RAGAS suite | Answer quality of the full agent, plus guardrail precision/recall | Not published yet |
+
+### Chunking experiment
+
+`evals/chunking_experiment.py` compares the four chunking strategies (`paragraph`, `fixed`, `recursive`, `semantic`) at chunk sizes 500, 1000 and 1500, with and without 15% overlap. Each configuration is indexed into a temporary in-memory Qdrant and searched with the production hybrid + FlashRank pipeline. The published run used a **local `sentence-transformers/all-MiniLM-L6-v2` embedder** (not the production Gemini model) and the **15 golden questions**, so it compares configurations against each other; absolute numbers will differ in production. It needs no API keys.
+
+Headline findings, quoted from [`evals/results/chunking_experiment.md`](evals/results/chunking_experiment.md):
+
+- **Chunk size is the clearest effect.** Mean over strategies at 500 / 1000 / 1500: MRR 0.704 / 0.815 / 0.885, hit rate 0.84 / 0.94 / 0.99, coverage 0.78 / 0.88 / 0.94.
+- **Overlap: no consistent benefit at this sample size, at a fixed cost.** The cost is certain: +16–17% chunks, embeddings and vector storage.
+- **Semantic chunking costs the most and wins nothing here.** It has the lowest mean MRR (0.733).
+- **Best configuration: `fixed / 1500 / 225`** (MRR 0.967, hit 1.00). It is **not distinguishably better than the current default `paragraph / 1500 / 0`** (MRR 0.900, hit 1.00): ΔMRR −0.067, 95% CI [−0.17, +0.00]. Recommendation: **Keep the current default, `paragraph / 1500 / 0`.** It ties for the best hit rate (1.00), sits within noise of the top MRR, embeds the fewest characters and needs no overlap.
+
+```bash
+python -m evals.chunking_experiment            # full grid, 18 configurations
+python -m evals.chunking_experiment --quick    # 8 configurations
+```
+
+### Retrieval benchmark
+
+`evals/retrieval_benchmark.py` compares dense only, dense + FlashRank, hybrid (RRF) and hybrid + FlashRank on the 15 golden questions against the live Qdrant collection. It reports hit rate@5, MRR@5, noise rate@5 (share of top-5 chunks from the distractor corpus) and latency. **It has not been run against the current collection, so no results are published.** Running it needs the Gemini and Qdrant keys; it prints the table and writes `evals/results/retrieval_benchmark.md`:
+
+```bash
+python -m evals.retrieval_benchmark              # --delay 3 if Gemini rate-limits (default 1.5 s)
+```
+
+### RAGAS suite
+
+The suite calls the live API for each golden question, then scores the answers with RAGAS Faithfulness, Answer Relevancy, Context Precision, Context Recall and Answer Correctness. The judge is Groq `llama-3.1-8b-instant` with its own `JUDGE_GROQ` key. It also computes a deterministic tool-correctness score (Jaccard overlap of the expected and detected route). Guardrail cases are scored as TP/TN/FP/FN with precision and recall. Scoring is paced for Groq's free tier and takes about 50 minutes. **No RAGAS report has been published yet.** Details: [DOCS/11_EVALS_PIPELINE.md](DOCS/11_EVALS_PIPELINE.md).
 
 ```bash
 uvicorn app.main:app --port 8000     # terminal 1
-streamlit run evals/app.py           # terminal 2
+streamlit run evals/app.py           # terminal 2: ground truth, live pipeline, eval metrics tabs
 ```
 
-Phase 1 calls `/query` for each golden question. Phase 2 scores the answers with RAGAS Faithfulness, Answer Relevancy, Context Precision, Context Recall and Answer Correctness (judge: Groq `llama-3.1-8b-instant` with its own `JUDGE_GROQ` key), plus a deterministic tool-correctness score (Jaccard overlap of the expected and detected route). Guardrail cases are scored as TP/TN/FP/FN with precision and recall. Phase 2 is paced for Groq's free tier and takes about 50 minutes. Details: [DOCS/11_EVALS_PIPELINE.md](DOCS/11_EVALS_PIPELINE.md).
+## Tests and quality
 
-**Retrieval benchmark** (`evals/retrieval_benchmark.py`). Compares dense only, dense + FlashRank, hybrid (RRF) and hybrid + FlashRank on the 15 golden questions against the live collection, reporting hit rate@5, MRR@5, noise rate@5 (share of top-5 chunks from the distractor corpus) and latency. The benchmark has not been run yet, so this README reports no numbers. Run `python -m evals.retrieval_benchmark` to generate results; it prints the table and writes `evals/results/retrieval_benchmark.md`. With 15 questions, one question moves hit rate by 6.7 points, so small differences are noise.
+| Check | Result |
+|---|---|
+| Tests | 510 passed, in 24 test files, with no API keys or network |
+| Line coverage of `app/` | 89% (CI fails below 75%) |
+| Lint and format | `ruff check` and `ruff format --check`, run in CI |
 
-**Chunking experiment** (`evals/chunking_experiment.py`). Compares the four chunking strategies (`paragraph`, `fixed`, `recursive`, `semantic`; set with `CHUNKING_STRATEGY` / `CHUNK_SIZE` / `CHUNK_OVERLAP`) across chunk sizes and overlaps on the 15 golden questions. Each configuration is indexed into a temporary in-memory Qdrant with the production hybrid + FlashRank pipeline and a free local embedder, so it needs no API keys. Run `python -m evals.chunking_experiment` (or `--quick`); results and findings: [`evals/results/chunking_experiment.md`](evals/results/chunking_experiment.md).
+Test count and coverage are from `python -m pytest tests -q --cov=app` in the CI environment (`requirements-dev.txt`) on 2026-11-07.
 
 ## Engineering decisions
 
