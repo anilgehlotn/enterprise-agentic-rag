@@ -47,7 +47,7 @@ This is useful for internal IT knowledge bases, policy assistants, product-suppo
 | **Chunk** | A small piece of a larger document. | The system searches manageable passages instead of an entire PDF. |
 | **Reranking** | A second, more precise ordering of search results. | FlashRank moves the strongest evidence to the top. |
 | **API** | A structured way for software systems to communicate. | Streamlit calls the FastAPI backend; the backend calls AI services. |
-| **FastAPI** | A Python framework for building web APIs. | It exposes `/query`, `/query/stream`, `/documents`, `/threads/{id}/reset` and `/health`. |
+| **FastAPI** | A Python framework for building web APIs. | It exposes `/query`, `/query/stream`, `/documents`, `/threads/{id}/reset`, `/feedback`, `/analytics` and `/health`. |
 | **Streamlit** | A Python framework for building data/AI web interfaces quickly. | It provides the visible chat and upload experience. |
 | **LangChain** | A library that helps connect LLMs, prompts, retrievers, and tools. | It supplies integrations used by the system. |
 | **LangGraph** | A library for modeling LLM workflows as a graph of steps and decisions. | It controls the planner → retriever → grader → (rewriter) → responder → verifier flow and conversation memory. |
@@ -511,6 +511,10 @@ Accepts multipart file uploads. It validates supported extension and size, then 
 ### `POST /threads/{thread_id}/reset`
 
 Deletes the saved conversation for one `thread_id`.
+
+### `POST /feedback` and `GET /analytics`
+
+Every `/query` response carries a `query_id`. The UI's 👍 / 👎 buttons send it to `POST /feedback` (one vote per answer; voting again replaces it). `GET /analytics?days=7` (header `X-API-Key`, disabled unless `ANALYTICS_API_KEY` is set) reports usage, grounded rate, rewrite rate, satisfaction and latency from hand-written SQL. Schema, every query and the SQL concepts behind them: [14 Analytics](14_ANALYTICS.md).
 
 ### Rate limits
 

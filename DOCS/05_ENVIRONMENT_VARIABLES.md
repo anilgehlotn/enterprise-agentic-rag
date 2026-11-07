@@ -46,6 +46,19 @@ The project uses a `.env` file for local development, loaded with `python-dotenv
 
 ---
 
+## 📊 Query analytics & feedback
+
+See [14 Analytics](14_ANALYTICS.md) for the schema and the SQL.
+
+| Variable | Description | Example |
+| :--- | :--- | :--- |
+| `ANALYTICS_ENABLED` | `true` (default): log one `query_log` row per `/query`, `/query/stream` and MCP `ask_knowledge_base` request, return `query_id`, accept `POST /feedback`. `false`: nothing is logged, `query_id` is `null`, `/feedback` returns 503. Any value other than true/false fails at startup. | `true` |
+| `ANALYTICS_DATABASE_URL` | SQLAlchemy URL of the analytics database. Unset: SQLite file `<project root>/state/analytics.sqlite` (git- and docker-ignored). `postgres://` / `postgresql://` URLs are used with psycopg 3. On Cloud Run it may be the same Postgres as `DATABASE_URL` (the deploy workflow does that when `CHECKPOINTER=postgres`). **A secret** when it contains a password. If the database is unreachable, answers still work; logging and feedback are unavailable and the error is logged. | `postgresql://user:pass@host/db?sslmode=require` |
+| `ANALYTICS_STORE_QUESTIONS` | `true` (default) stores the question text; `false` stores `NULL` (the top-questions report is then empty). Answers, retrieved content and keys are never stored. | `false` |
+| `ANALYTICS_API_KEY` | Key for `GET /analytics`, sent as the `X-API-Key` header (compared in constant time). **Unset: the endpoint returns 404**, so it is never open by default. **A secret.** | `k3y...` |
+
+---
+
 ## 🕵️ Observability
 
 | Variable | Description | Example |

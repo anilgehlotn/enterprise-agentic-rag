@@ -186,6 +186,7 @@ def test_event_order_steps_tokens_sources_done(api_app, use_graph):
                 "Verification: answer supported by sources ✅",
             ],
             "answer": "Jobs run Pods to completion [1].",
+            "query_id": None,
         },
     )
 
@@ -235,6 +236,7 @@ def test_blocked_by_guardrails_streams_the_canned_reply(api_app, use_graph):
         "grounded": None,
         "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
         "answer": "I can only help with technical documentation questions.",
+        "query_id": None,
     }
 
 

@@ -16,20 +16,24 @@ load_dotenv()
 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"), send_to_logfire="if-token-present")
 
 # Now safe to import app modules - logfire is already active
+import hmac
 import json
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Response, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app import analytics
 from app.agents.checkpointer import open_checkpointer
 from app.agents.graph import get_rag_agent, shutdown_rag_agent
+from app.analytics.store import MAX_COMMENT_CHARS
 from app.ingestion.chunking.config import resolve_chunking_config
 from app.ingestion.processor import process_file
-from app.rate_limit import limit_queries, limit_uploads, validate_rate_limits
+from app.rate_limit import limit_analytics, limit_feedback, limit_queries, limit_uploads, validate_rate_limits
 from app.schemas import MAX_QUESTION_CHARS, MAX_THREAD_ID_CHARS, QueryResponse
 from app.services import rag_service
 from app.services.retrieval.schema import resolve_retrieval_mode
@@ -47,9 +51,13 @@ async def lifespan(_app: FastAPI):
     resolve_retrieval_mode()
     resolve_chunking_config()
     validate_rate_limits()
+    analytics.validate_analytics_config()
     # Raises ValueError on an invalid CHECKPOINTER value; for postgres it connects and
     # creates the checkpoint tables (setup()) here, once per process.
     open_checkpointer()
+    # Creates the analytics database / applies its SQL migrations. Logs and carries on if
+    # the database is unreachable: answering questions must not depend on analytics.
+    analytics.init_analytics()
     try:
         # Warm-up only: rag_service.answer_question() also calls ensure_rails(), which is
         # idempotent, so every entry point (API and MCP server) is guarded either way.
@@ -57,6 +65,7 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         shutdown_rag_agent()
+        analytics.shutdown_analytics()
 
 
 # Initialize FastAPI
@@ -192,3 +201,61 @@ def reset_thread(thread_id: str = PathParam(min_length=1, max_length=MAX_THREAD_
         logfire.error(f"Could not reset thread {thread_id}: {exc}")
         raise HTTPException(status_code=503, detail="Conversation memory is unavailable; try again.") from None
     return {"thread_id": thread_id, "status": "cleared"}
+
+
+# ── Feedback and analytics ────────────────────────────────────────────────────
+
+
+class FeedbackRequest(BaseModel):
+    query_id: str = Field(min_length=1, max_length=64, description="query_id from the /query response")
+    rating: Literal[1, -1] = Field(description="1 = thumbs up, -1 = thumbs down")
+    comment: str | None = Field(default=None, max_length=MAX_COMMENT_CHARS)
+
+
+class FeedbackResponse(BaseModel):
+    query_id: str
+    rating: int
+    comment: str | None
+    created_at: str
+    updated_at: str
+
+
+@app.post(
+    "/feedback",
+    response_model=FeedbackResponse,
+    status_code=201,
+    dependencies=[Depends(limit_feedback)],
+)
+def submit_feedback(request: FeedbackRequest):
+    """Thumbs up/down on one answer. A second vote on the same query_id replaces the first."""
+    try:
+        saved = analytics.record_feedback(request.query_id, request.rating, request.comment)
+    except analytics.AnalyticsUnavailable as exc:
+        logfire.error(f"Feedback not recorded: {exc}")
+        raise HTTPException(status_code=503, detail="Feedback is unavailable right now.") from None
+    if saved is None:
+        raise HTTPException(status_code=404, detail="Unknown query_id.")
+    return saved
+
+
+@app.get("/analytics", dependencies=[Depends(limit_analytics)])
+def get_analytics(
+    days: Annotated[int, Query(ge=1, le=90, description="Window: today and the days-1 days before it")] = 7,
+    x_api_key: Annotated[str | None, Header()] = None,
+):
+    """
+    Query analytics (hand-written SQL in app/analytics/queries.py). Requires ANALYTICS_API_KEY
+    in the X-API-Key header; without a configured key the endpoint doesn't exist (404).
+    """
+    expected = analytics.analytics_api_key()
+    if expected is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    # compare_digest takes the same time whether the first or the last character differs,
+    # so response timing can't be used to guess the key one character at a time.
+    if x_api_key is None or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
+    try:
+        return analytics.get_summary(days)
+    except analytics.AnalyticsUnavailable as exc:
+        logfire.error(f"Analytics unavailable: {exc}")
+        raise HTTPException(status_code=503, detail="Analytics is unavailable right now.") from None

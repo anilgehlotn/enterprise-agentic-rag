@@ -105,11 +105,16 @@ jobs:
           # Secret Manager (DOCS/12 section 8); otherwise memory is per-instance SQLite.
           # TRUST_PROXY_HEADERS: requests arrive through Google's front end, so rate limits
           # must key on the X-Forwarded-For entry it appends, not on the proxy's address.
+          # ANALYTICS_*: query analytics + feedback (DOCS/14). With CHECKPOINTER=postgres the
+          # analytics tables live in the same Postgres (ANALYTICS_DATABASE_URL below);
+          # otherwise in a per-instance SQLite file that is lost on scale-down.
           env_vars: |-
             QDRANT_COLLECTION=enterprise_rag_v2
             RETRIEVAL_MODE=hybrid
             CHECKPOINTER=${{ vars.CHECKPOINTER || 'sqlite' }}
             TRUST_PROXY_HEADERS=true
+            ANALYTICS_ENABLED=${{ vars.ANALYTICS_ENABLED || 'true' }}
+            ANALYTICS_STORE_QUESTIONS=${{ vars.ANALYTICS_STORE_QUESTIONS || 'true' }}
           env_vars_update_strategy: overwrite
           # Every key comes from Secret Manager (secret name = env var name, latest version).
           # The runtime service account needs roles/secretmanager.secretAccessor on each.
@@ -123,6 +128,8 @@ jobs:
             LOGFIRE_TOKEN=LOGFIRE_TOKEN:latest
             LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest
             ${{ vars.CHECKPOINTER == 'postgres' && 'DATABASE_URL=DATABASE_URL:latest' || '' }}
+            ${{ vars.CHECKPOINTER == 'postgres' && 'ANALYTICS_DATABASE_URL=DATABASE_URL:latest' || '' }}
+            ${{ vars.ANALYTICS_ENDPOINT == 'enabled' && 'ANALYTICS_API_KEY=ANALYTICS_API_KEY:latest' || '' }}
           secrets_update_strategy: overwrite
           flags: >-
             --min-instances=0

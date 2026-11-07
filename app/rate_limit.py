@@ -14,7 +14,8 @@ instances a client can get at most 2x the limit, which is acceptable here. A
 multi-instance deployment that needs exact global limits would use Redis instead.
 
 Configuration (read on each request, validated at startup):
-  RATE_LIMIT_QUERY     default "20/minute"   /query and /query/stream (one shared budget)
+  RATE_LIMIT_QUERY     default "20/minute"   /query and /query/stream (one shared budget);
+                                             also /feedback and /analytics (one budget each)
   RATE_LIMIT_UPLOAD    default "5/minute"    /documents
   TRUST_PROXY_HEADERS  default false         use X-Forwarded-For (see client_ip())
 """
@@ -150,3 +151,7 @@ def rate_limit(scope: str, env_var: str, default: str) -> Callable[[Request], No
 
 limit_queries = rate_limit("query", QUERY_LIMIT_ENV, QUERY_LIMIT_DEFAULT)
 limit_uploads = rate_limit("upload", UPLOAD_LIMIT_ENV, UPLOAD_LIMIT_DEFAULT)
+# Same limit as /query (RATE_LIMIT_QUERY), separate budgets: voting must not use up a
+# user's question budget, and /analytics failures (wrong key) can't be retried at will.
+limit_feedback = rate_limit("feedback", QUERY_LIMIT_ENV, QUERY_LIMIT_DEFAULT)
+limit_analytics = rate_limit("analytics", QUERY_LIMIT_ENV, QUERY_LIMIT_DEFAULT)

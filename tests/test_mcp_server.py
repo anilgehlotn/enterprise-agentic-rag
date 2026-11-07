@@ -116,7 +116,8 @@ def test_descriptions_tell_the_client_when_to_prefer_each_tool():
 def test_ask_knowledge_base_returns_answer_sources_and_grounded(monkeypatch):
     calls = []
 
-    def fake_answer(question, thread_id):
+    def fake_answer(question, thread_id, source):
+        assert source == "mcp"
         calls.append((question, thread_id))
         return {
             "question": question,
@@ -153,7 +154,7 @@ def test_ask_knowledge_base_returns_answer_sources_and_grounded(monkeypatch):
 def test_ask_uses_default_thread_and_passes_guardrail_blocks_through(monkeypatch):
     seen = {}
 
-    def blocked(question, thread_id):
+    def blocked(question, thread_id, source):
         seen["thread_id"] = thread_id
         return {
             "question": question,
@@ -230,7 +231,7 @@ def test_ask_accepts_exactly_the_limit(monkeypatch):
     monkeypatch.setattr(
         rag_service,
         "answer_question",
-        lambda q, t: {
+        lambda q, t, source="mcp": {
             "answer": "ok",
             "status": "Response generated.",
             "sources": [],
@@ -302,7 +303,7 @@ def test_pipeline_error_status_is_reported_as_tool_error(monkeypatch):
     monkeypatch.setattr(
         rag_service,
         "answer_question",
-        lambda q, t: {
+        lambda q, t, source="mcp": {
             "answer": rag_service.INTERNAL_ERROR_ANSWER,
             "status": "error",
             "sources": [],

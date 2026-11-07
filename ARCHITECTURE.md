@@ -15,7 +15,7 @@ graph LR
 
     subgraph ENTRY ["Entry points"]
         direction TB
-        API["FastAPI<br/>/query · /query/stream (SSE)<br/>/documents · /threads/{id}/reset"]
+        API["FastAPI<br/>/query · /query/stream (SSE)<br/>/documents · /threads/{id}/reset<br/>/feedback · /analytics"]
         RL["Per-IP rate limit<br/>app/rate_limit.py"]
         MCPS["MCP server<br/>ask · search · list"]
     end
@@ -30,6 +30,12 @@ graph LR
         direction TB
         NODES["planner → retriever → grader<br/>→ rewriter ↺ → responder → verifier"]
         CP[("Checkpointer<br/>SQLite · Postgres · memory")]
+    end
+
+    subgraph ANALYTICS ["Analytics (app/analytics)"]
+        direction TB
+        AW["writer thread<br/>(queue, never blocks)"]
+        ADB[("query_log · feedback<br/>SQLite · Postgres")]
     end
 
     subgraph RETRIEVAL ["Retrieval"]
@@ -56,6 +62,8 @@ graph LR
     GR -->|"pass"| NODES
     GR -->|"rail fired: canned reply"| SVC
     NODES <--> CP
+    SVC -.->|"one row per request"| AW --> ADB
+    API -->|"/feedback · /analytics (SQL)"| ADB
     NODES --> GEM --> QD
     NODES --> BM --> QD
     QD --> FR --> NODES
@@ -65,7 +73,7 @@ graph LR
     GR -.->|"direct ChatGroq"| G2
 ```
 
-The API and the MCP server never call the agent directly. Both go through `rag_service`, so guardrails, the per-request state reset, the thread config and the response shape are written once. `/query` and `/query/stream` run the same helpers: `/query` calls `graph.invoke()`, while `/query/stream` calls `graph.stream(stream_mode=["updates", "custom"])`.
+The API and the MCP server never call the agent directly. Both go through `rag_service`, so guardrails, the per-request state reset, the thread config and the response shape are written once. `/query` and `/query/stream` run the same helpers: `/query` calls `graph.invoke()`, while `/query/stream` calls `graph.stream(stream_mode=["updates", "custom"])`. The service layer also logs one `query_log` row per request (source `api`, `stream` or `mcp`) by handing it to a background writer thread, so analytics never adds latency or failure modes to an answer; `/feedback` and `/analytics` read and write those tables with hand-written SQL ([DOCS/14](DOCS/14_ANALYTICS.md)).
 
 ## 2. Agent graph (self-correcting mode, the default)
 

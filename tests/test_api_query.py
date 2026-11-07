@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 
 from app.services import rag_service
 
-RESPONSE_KEYS = {"question", "answer", "thought_process", "status", "sources", "grounded"}
+# The original six fields + query_id (additive, for POST /feedback; None when analytics is off).
+RESPONSE_KEYS = {"question", "answer", "thought_process", "status", "sources", "grounded", "query_id"}
 
 
 @pytest.fixture
@@ -82,6 +83,7 @@ def test_query_returns_the_same_response_shape(api, monkeypatch):
             }
         ],
         "grounded": True,
+        "query_id": None,
     }
     assert calls.answer == [("What is a CronJob?", "abc")]
 
@@ -127,7 +129,7 @@ def test_query_blocked_and_error_shapes(api, monkeypatch, result):
 
     body = TestClient(main.app).post("/query", json={"q": result["question"]}).json()
 
-    assert body == result
+    assert body == {**result, "query_id": None}
 
 
 @pytest.mark.parametrize("payload", [{"q": ""}, {"q": "x" * 4001}, {}])

@@ -10,12 +10,14 @@ functions), so importing this module needs no API keys, network or heavy package
 import json
 import os
 import re
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import logfire
 
+from app import analytics
 from app.services.retrieval.citations import build_citations
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -98,28 +100,64 @@ def _error_result(question: str) -> dict[str, Any]:
     }
 
 
-def answer_question(question: str, thread_id: str | None) -> dict[str, Any]:
+# ── Query analytics (app/analytics) ──────────────────────────────────────────
+# Every entry point (/query = "api", /query/stream = "stream", MCP = "mcp") logs one
+# query_log row through these two helpers. Logging only enqueues a row for a background
+# writer: it never touches the database on the request thread and never raises.
+
+
+def _start_query() -> tuple[str | None, float]:
+    """A query id (None when analytics is off or misconfigured) and the start time."""
+    try:
+        query_id = analytics.new_query_id()
+    except Exception as exc:
+        logfire.error(f"Analytics disabled for this request: {exc}")
+        query_id = None
+    return query_id, time.perf_counter()
+
+
+def _finish_query(
+    result: dict[str, Any],
+    query_id: str | None,
+    started: float,
+    source: str,
+    question: str,
+    thread_id: str | None,
+    retrieval_attempts: int = 0,
+) -> dict[str, Any]:
+    """Adds query_id to the response and queues the analytics row."""
+    result["query_id"] = query_id
+    latency_ms = (time.perf_counter() - started) * 1000
+    analytics.log_query(query_id, source, question, thread_id, result, retrieval_attempts, latency_ms)
+    return result
+
+
+def answer_question(question: str, thread_id: str | None, source: str = "api") -> dict[str, Any]:
     """
     Guardrails gate + self-correcting LangGraph agent.
 
     Returns the QueryResponse shape: question, answer, thought_process, status,
-    sources, grounded. Never raises: pipeline errors become status="error".
+    sources, grounded, query_id. Never raises: pipeline errors become status="error".
+    source ("api" or "mcp") is recorded in query analytics.
     """
     from app.agents.graph import get_rag_agent
 
+    query_id, started = _start_query()
     try:
         blocked = _check_guardrails(question, thread_id)
         if blocked is not None:
-            return blocked
+            return _finish_query(blocked, query_id, started, source, question, thread_id)
 
         # Gate 2: LangGraph RAG pipeline
         # Run the graph synchronously to preserve Logfire context variables
         initial_state, config = _agent_inputs(question, thread_id)
         final_output = get_rag_agent().invoke(initial_state, config=config)
-        return _result_from_state(question, final_output)
+        result = _result_from_state(question, final_output)
+        attempts = final_output.get("retrieval_attempts") or 0
+        return _finish_query(result, query_id, started, source, question, thread_id, attempts)
     except Exception as e:
         logfire.error(f"❌ Backend Execution Failed: {e}")
-        return _error_result(question)
+        return _finish_query(_error_result(question), query_id, started, source, question, thread_id)
 
 
 # ── Streaming ─────────────────────────────────────────────────────────────────
@@ -128,7 +166,7 @@ def answer_question(question: str, thread_id: str | None) -> dict[str, Any]:
 #   step*    one per new plan entry as each graph node finishes
 #   token*   answer text chunks
 #   sources  final citations
-#   done     status, grounded, thought_process (+ the full answer)
+#   done     status, grounded, thought_process, query_id (+ the full answer)
 # or, instead of sources/done when something fails:
 #   error    friendly message, never a traceback
 STEP, TOKEN, SOURCES, DONE, ERROR = "step", "token", "sources", "done", "error"
@@ -173,9 +211,11 @@ def stream_answer(question: str, thread_id: str | None) -> Iterator[StreamEvent]
     from app.agents.graph import get_rag_agent
     from app.agents.streaming import STREAM_TOKENS_KEY, TOKEN_ITEM
 
+    query_id, started = _start_query()
     try:
         blocked = _check_guardrails(question, thread_id)
         if blocked is not None:
+            _finish_query(blocked, query_id, started, "stream", question, thread_id)
             for chunk in _text_chunks(blocked["answer"]):
                 yield TOKEN, {"text": chunk}
             yield DONE, _done_payload(blocked)
@@ -200,6 +240,8 @@ def stream_answer(question: str, thread_id: str | None) -> Iterator[StreamEvent]
                 final_state.update({key: value for key, value in update.items() if key != "messages"})
 
         result = _result_from_state(question, final_state)
+        attempts = final_state.get("retrieval_attempts") or 0
+        _finish_query(result, query_id, started, "stream", question, thread_id, attempts)
         if not streamed_tokens:
             # Answers written without an LLM call: "knowledge base unavailable"
             # (retriever) and "not in the documents" (responder).
@@ -209,6 +251,7 @@ def stream_answer(question: str, thread_id: str | None) -> Iterator[StreamEvent]
         yield DONE, _done_payload(result)
     except Exception as e:
         logfire.error(f"❌ Streaming Execution Failed: {e}")
+        _finish_query(_error_result(question), query_id, started, "stream", question, thread_id)
         yield ERROR, {"message": INTERNAL_ERROR_ANSWER}
 
 
@@ -218,6 +261,7 @@ def _done_payload(result: dict[str, Any]) -> dict[str, Any]:
         "grounded": result["grounded"],
         "thought_process": result["thought_process"],
         "answer": result["answer"],
+        "query_id": result.get("query_id"),
     }
 
 

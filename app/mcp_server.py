@@ -80,6 +80,9 @@ class AskResult(BaseModel):
     status: str
     sources: list[EvidenceSource]
     thought_process: list[str]
+    query_id: str | None = Field(
+        default=None, description="Id of this answer in the query analytics (for feedback); null when disabled."
+    )
 
 
 class SearchResult(BaseModel):
@@ -181,7 +184,7 @@ def ask_knowledge_base(
     thread_id = _require_text(thread_id, "thread_id", MAX_THREAD_ID_CHARS)
 
     try:
-        result = rag_service.answer_question(question, thread_id)
+        result = rag_service.answer_question(question, thread_id, source="mcp")
     except Exception as exc:
         raise _service_failure("answering the question") from exc
 
@@ -195,6 +198,7 @@ def ask_knowledge_base(
         status=result.get("status") or "",
         sources=[EvidenceSource(**source) for source in result.get("sources") or []],
         thought_process=result.get("thought_process") or [],
+        query_id=result.get("query_id"),
     )
 
 

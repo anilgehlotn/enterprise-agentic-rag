@@ -66,6 +66,12 @@ if "messages" not in st.session_state:
 if "uploaded_documents" not in st.session_state:
     st.session_state.uploaded_documents = []
 
+# query_id → the vote sent for that answer (1 / -1), and query_id → last feedback error.
+if "feedback" not in st.session_state:
+    st.session_state.feedback = {}
+if "feedback_errors" not in st.session_state:
+    st.session_state.feedback_errors = {}
+
 
 def _backend_url() -> str:
     return os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
@@ -120,7 +126,7 @@ def stream_query(payload: dict, status, answer_placeholder) -> dict:
     answer placeholder as they arrive. Returns a /query-shaped dict.
     Raises RateLimitedError on 429 and StreamUnavailableError when nothing was received.
     """
-    data = {"answer": "", "sources": [], "thought_process": [], "grounded": None, "status": ""}
+    data = {"answer": "", "sources": [], "thought_process": [], "grounded": None, "status": "", "query_id": None}
     received_any = False
     try:
         with requests.post(
@@ -140,7 +146,7 @@ def stream_query(payload: dict, status, answer_placeholder) -> dict:
                 elif event == "sources":
                     data["sources"] = body.get("sources") or []
                 elif event == "done":
-                    data.update({k: body.get(k) for k in ("status", "grounded", "thought_process")})
+                    data.update({k: body.get(k) for k in ("status", "grounded", "thought_process", "query_id")})
                     data["answer"] = body.get("answer") or data["answer"]
                     return data
                 elif event == "error":
@@ -182,6 +188,62 @@ def render_sources(sources) -> None:
             with st.expander(f"[{i + 1}] {source_name}{score_label}"):
                 st.caption(f"Type: {source.get('source_type', 'unknown')}")
                 st.info(source.get("content", ""))
+
+
+FEEDBACK_TIMEOUT_SECONDS = 10
+
+
+def send_feedback(query_id: str, rating: int) -> None:
+    """Button callback: POST /feedback. Voting again on the same answer replaces the vote."""
+    errors = st.session_state.feedback_errors
+    try:
+        response = requests.post(
+            f"{_backend_url()}/feedback",
+            json={"query_id": query_id, "rating": rating},
+            timeout=FEEDBACK_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        logfire.error(f"Feedback not sent: {exc}")
+        errors[query_id] = "Feedback couldn't be sent. Is the backend running?"
+        return
+    if response.status_code == 201:
+        st.session_state.feedback[query_id] = rating
+        errors.pop(query_id, None)
+    elif response.status_code == 429:
+        errors[query_id] = "⏳ Too many votes in a short time. Try again in a moment."
+    elif response.status_code == 404:
+        errors[query_id] = "This answer is no longer in the analytics log, so it can't be rated."
+    else:
+        errors[query_id] = "Feedback couldn't be saved right now."
+
+
+def render_feedback(query_id: str | None) -> None:
+    """👍 / 👎 under an answer. Keys use the query_id, so older answers in the history keep working."""
+    if not query_id:  # analytics off, or an answer from before this feature
+        return
+    vote = st.session_state.feedback.get(query_id)
+    up, down, note = st.columns([1, 1, 10])
+    up.button(
+        "👍",
+        key=f"feedback_up_{query_id}",
+        help="Helpful answer",
+        type="primary" if vote == 1 else "secondary",
+        on_click=send_feedback,
+        args=(query_id, 1),
+    )
+    down.button(
+        "👎",
+        key=f"feedback_down_{query_id}",
+        help="Not helpful",
+        type="primary" if vote == -1 else "secondary",
+        on_click=send_feedback,
+        args=(query_id, -1),
+    )
+    error = st.session_state.feedback_errors.get(query_id)
+    if error:
+        note.caption(error)
+    elif vote is not None:
+        note.caption("Thanks for the feedback")
 
 
 @st.dialog("Upload and attach files", width="large")
@@ -285,6 +347,8 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
         render_grounded_badge(message.get("grounded"))
+        if message["role"] == "assistant":
+            render_feedback(message.get("query_id"))
 
 # Chat Input
 if prompt := st.chat_input("Ask a question about your knowledge sources…"):
@@ -333,5 +397,9 @@ if prompt := st.chat_input("Ask a question about your knowledge sources…"):
             render_sources(data.get("sources", []))
             grounded = data.get("grounded")
             render_grounded_badge(grounded)
-            st.session_state.messages.append({"role": "assistant", "content": full_answer, "grounded": grounded})
+            query_id = data.get("query_id")
+            render_feedback(query_id)
+            st.session_state.messages.append(
+                {"role": "assistant", "content": full_answer, "grounded": grounded, "query_id": query_id}
+            )
             logfire.info("✅ Chat cycle completed successfully.")
