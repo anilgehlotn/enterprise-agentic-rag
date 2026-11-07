@@ -173,6 +173,8 @@ Phase 1 calls `/query` for each golden question. Phase 2 scores the answers with
 
 **Retrieval benchmark** (`evals/retrieval_benchmark.py`). Compares dense only, dense + FlashRank, hybrid (RRF) and hybrid + FlashRank on the 15 golden questions against the live collection, reporting hit rate@5, MRR@5, noise rate@5 (share of top-5 chunks from the distractor corpus) and latency. The benchmark has not been run yet, so this README reports no numbers. Run `python -m evals.retrieval_benchmark` to generate results; it prints the table and writes `evals/results/retrieval_benchmark.md`. With 15 questions, one question moves hit rate by 6.7 points, so small differences are noise.
 
+**Chunking experiment** (`evals/chunking_experiment.py`). Compares the four chunking strategies (`paragraph`, `fixed`, `recursive`, `semantic`; set with `CHUNKING_STRATEGY` / `CHUNK_SIZE` / `CHUNK_OVERLAP`) across chunk sizes and overlaps on the 15 golden questions. Each configuration is indexed into a temporary in-memory Qdrant with the production hybrid + FlashRank pipeline and a free local embedder, so it needs no API keys. Run `python -m evals.chunking_experiment` (or `--quick`); results and findings: [`evals/results/chunking_experiment.md`](evals/results/chunking_experiment.md).
+
 ## Engineering decisions
 
 - **The grader fails open; the guardrails fail closed.** If the relevance grader's output can't be parsed or its call fails, all chunks are kept, because a flaky grader must never throw away evidence. If guardrails can't initialise, the request returns an error, because an unguarded request is worse than a failed one.
@@ -203,7 +205,7 @@ app/
   rate_limit.py           Sliding-window per-IP limiter
   mcp_server.py           MCP server (3 tools)
 ui/app.py                 Streamlit chat (SSE streaming with /query fallback) and upload dialog
-evals/                    Golden dataset, RAGAS pipeline + dashboard, retrieval benchmark
+evals/                    Golden dataset, RAGAS pipeline + dashboard, retrieval benchmark, chunking experiment
 tests/                    Unit and API tests (no keys, no network)
 notebooks/                Guardrails, gateway and evals experiments
 DATA/                     Sample corpus: true_data (answers) and noisy_data (distractors)

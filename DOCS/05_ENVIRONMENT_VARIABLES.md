@@ -39,6 +39,9 @@ The project uses a `.env` file for local development, loaded with `python-dotenv
 | `RETRIEVAL_MODE` | `hybrid` (default): dense + BM25 prefetch fused with Qdrant RRF, then FlashRank. `dense`: dense-only search, then FlashRank. Any other value fails at API startup. Both modes use the same collection. | `hybrid` |
 | `FASTEMBED_CACHE_PATH` | Optional. Where fastembed caches the `Qdrant/bm25` model (default: a temp directory). Read by fastembed itself; the Docker image sets it to `/opt/models`. | `/tmp/fastembed` |
 | `FLASHRANK_CACHE_DIR` | Optional. Where FlashRank keeps its ONNX reranker model (default `/tmp/flashrank`). The Docker image sets it to `/opt/models`, where the model is pre-downloaded. | `/tmp/flashrank` |
+| `CHUNKING_STRATEGY` | How ingestion (CLI and `/documents`) splits text: `paragraph` (default, the original chunker), `fixed`, `recursive` or `semantic` (embeds every sentence with the ingestion embedder). Any other value fails at API startup and before `processor --wipe` touches Qdrant. Re-ingest after changing it. See [02 Ingestion engine](02_INGESTION_ENGINE.md#2-chunking-strategies). | `paragraph` |
+| `CHUNK_SIZE` | Maximum chunk length in characters (default `1500`, a positive integer). | `1500` |
+| `CHUNK_OVERLAP` | Characters repeated between consecutive chunks (default `0`). Must be smaller than `CHUNK_SIZE`; only `fixed` and `recursive` support it (`paragraph` and `semantic` require `0`). | `0` |
 | `PROCESSED_DATA_DIR` | Optional. Folder the MCP tool `list_indexed_documents` reads (default `<project root>/processed_data`). Ingestion always writes to `processed_data/` under the current working directory. | `./processed_data` |
 
 ---

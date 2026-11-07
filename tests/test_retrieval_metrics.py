@@ -144,3 +144,78 @@ def test_noise_rate_ignores_other_source_types_and_handles_empty():
     assert noise_rate([["uploaded", "unknown", "true"]]) == 0.0
     assert noise_rate([[], []]) == 0.0
     assert noise_rate([]) == 0.0
+
+
+# ── partial-match rule (chunking experiment) ─────────────────────────────────
+
+from evals.retrieval_metrics import chunk_covers, context_coverage, partial_overlap  # noqa: E402
+
+LONG_GOLDEN = (
+    "Start a temporary interactive pod for running the Redis CLI. Once the prompt appears, "
+    "connect to Redis and fill the queue named job2 with rpush job2 apple, rpush job2 banana "
+    "and rpush job2 cherry, then check the list with lrange job2 0 -1."
+)
+
+
+def test_partial_rule_counts_a_small_chunk_that_is_a_piece_of_the_golden_context():
+    # A small chunk holding the second half of the golden context: most of the CHUNK is golden
+    # text, but under half of the golden context is in it, so the strict rule misses it.
+    piece = "connect to Redis and fill the queue named job2 with rpush job2 apple, rpush job2 banana"
+    chunk = piece + " STEP 3: CREATE A CONTAINER IMAGE"
+
+    assert not chunk_matches(chunk, LONG_GOLDEN)
+    assert chunk_covers(chunk, LONG_GOLDEN)
+    assert partial_overlap(chunk, LONG_GOLDEN) >= 0.5
+
+
+def test_partial_rule_counts_a_large_chunk_holding_most_of_the_golden_context():
+    chunk = "Unrelated intro text about the cluster. " + LONG_GOLDEN[:150] + " More unrelated text follows here."
+
+    assert chunk_covers(chunk, LONG_GOLDEN)
+
+
+def test_partial_rule_rejects_a_chunk_that_only_grazes_the_golden_context():
+    # Shares one short phrase with the golden context, rest is another passage.
+    chunk = (
+        "Build the worker image with docker build -t job-wq-2 . and push it to your registry. "
+        "Start a temporary interactive pod for debugging. Then define the Job manifest with "
+        "parallelism set to two and restartPolicy OnFailure so failed pods are retried."
+    )
+
+    assert not chunk_covers(chunk, LONG_GOLDEN)
+
+
+def test_partial_rule_needs_a_minimum_number_of_shared_bigrams():
+    # The wrong match found on the real corpus: a 4-bigram PDF line vs a minikube golden context.
+    golden = "Start Minikube: minikube start --driver=docker. This command will take a few minutes to complete."
+
+    assert partial_overlap("This will take a while.", golden) >= 0.5
+    assert not chunk_covers("This will take a while.", golden)
+
+
+def test_partial_rule_containment_and_empty_inputs():
+    assert chunk_covers("rpush job2 apple", LONG_GOLDEN)  # chunk inside the golden context
+    assert chunk_covers("prefix " + LONG_GOLDEN + " suffix", LONG_GOLDEN)
+    assert not chunk_covers("", LONG_GOLDEN)
+    assert not chunk_covers("text", None)
+    assert partial_overlap("", LONG_GOLDEN) == 0.0
+
+
+def test_first_relevant_rank_accepts_the_partial_rule():
+    piece = "connect to Redis and fill the queue named job2 with rpush job2 apple, rpush job2 banana STEP 3"
+    chunks = ["unrelated text about pods", piece]
+
+    assert first_relevant_rank(chunks, [LONG_GOLDEN], k=5) is None
+    assert first_relevant_rank(chunks, [LONG_GOLDEN], k=5, match=chunk_covers) == 2
+    assert reciprocal_rank(chunks, [LONG_GOLDEN], k=5, match=chunk_covers) == 0.5
+    assert is_relevant(piece, [LONG_GOLDEN], match=chunk_covers)
+
+
+def test_context_coverage_measures_the_share_of_golden_evidence_retrieved():
+    golden = ["alpha beta gamma delta", "epsilon zeta eta"]  # 3 + 2 = 5 bigrams
+
+    assert context_coverage(["alpha beta gamma delta epsilon zeta eta"], golden) == 1.0
+    assert context_coverage(["alpha beta gamma", "nothing here"], golden) == pytest.approx(2 / 5)
+    assert context_coverage(["x"] * 5 + ["epsilon zeta eta"], golden, k=5) == 0.0  # only the top k count
+    assert context_coverage([], golden) == 0.0
+    assert context_coverage(["alpha beta"], []) == 0.0
