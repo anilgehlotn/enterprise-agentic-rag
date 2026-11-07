@@ -72,3 +72,19 @@ def test_startup_still_rejects_an_invalid_retrieval_mode(fresh_main, monkeypatch
 
     with pytest.raises(ValueError, match="RETRIEVAL_MODE"), TestClient(main.app):
         pass
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"CHUNKING_STRATEGY": "sentences"}, "Invalid CHUNKING_STRATEGY"),
+        ({"CHUNKING_STRATEGY": "fixed", "CHUNK_SIZE": "100", "CHUNK_OVERLAP": "100"}, "must be smaller than"),
+    ],
+)
+def test_startup_rejects_an_invalid_chunking_config(fresh_main, monkeypatch, env, message):
+    main, _ = fresh_main
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=message), TestClient(main.app):
+        pass

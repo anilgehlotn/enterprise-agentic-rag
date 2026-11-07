@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from app.agents.checkpointer import open_checkpointer
 from app.agents.graph import get_rag_agent, shutdown_rag_agent
+from app.ingestion.chunking.config import resolve_chunking_config
 from app.ingestion.processor import process_file
 from app.rate_limit import limit_queries, limit_uploads, validate_rate_limits
 from app.schemas import MAX_QUESTION_CHARS, MAX_THREAD_ID_CHARS, QueryResponse
@@ -41,9 +42,10 @@ async def lifespan(_app: FastAPI):
     Shutdown (after the server stops accepting requests): close the checkpointer's
     SQLite file / Postgres pool, so no connection is left half-open on SIGTERM.
     """
-    # Fail fast on a mistyped RETRIEVAL_MODE / RATE_LIMIT_* / CHECKPOINTER instead of
-    # failing on the first query.
+    # Fail fast on a mistyped RETRIEVAL_MODE / RATE_LIMIT_* / CHECKPOINTER / CHUNKING_STRATEGY /
+    # CHUNK_SIZE / CHUNK_OVERLAP instead of failing on the first query or upload.
     resolve_retrieval_mode()
+    resolve_chunking_config()
     validate_rate_limits()
     # Raises ValueError on an invalid CHECKPOINTER value; for postgres it connects and
     # creates the checkpoint tables (setup()) here, once per process.

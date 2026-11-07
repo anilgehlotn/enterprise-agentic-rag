@@ -212,7 +212,7 @@ flowchart TD
 | `app/agents/nodes/grader.py`, `rewriter.py`, `verifier.py` | Corrective RAG and Self-RAG | “They drop irrelevant chunks, retry with a better query, and check the answer.” |
 | `app/agents/nodes/responder.py` | Final answer generation | “It constructs a citation-numbered prompt from context and history, and streams tokens on `/query/stream`.” |
 | `app/ingestion/loaders/` | PDF, HTML, TXT, DOCX, PPTX parsing | “Each format has a suitable local parser.” |
-| `app/ingestion/chunking/splitter.py` | Splits text into chunks | “It keeps chunks within a bounded context size.” |
+| `app/ingestion/chunking/` | Splits text into chunks: `paragraph` (default), `fixed`, `recursive`, `semantic` | “Chunking is configurable, and `evals/chunking_experiment.py` measures which strategy retrieves best.” |
 | `app/ingestion/processor.py` | Parse -> chunk -> embed -> index | “This is the ingestion pipeline.” |
 | `app/services/retrieval/embedding.py` | Gemini embedding client | “Creates semantic vectors for text.” |
 | `app/services/retrieval/qdrant_service.py` | Qdrant schema and search | “Runs hybrid (dense + BM25, RRF) or dense search.” |

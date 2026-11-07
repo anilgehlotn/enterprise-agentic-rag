@@ -1,4 +1,4 @@
-import logfire
+"""Paragraph chunker: the original strategy, kept unchanged as the default and the baseline."""
 
 
 def _split_oversized_paragraph(paragraph: str, chunk_size: int) -> list[str]:
@@ -19,32 +19,29 @@ def _split_oversized_paragraph(paragraph: str, chunk_size: int) -> list[str]:
     return chunks
 
 
-def chunk_text(text: str, chunk_size: int = 1500) -> list[str]:
+def paragraph_chunk(text: str, chunk_size: int = 1500, chunk_overlap: int = 0) -> list[str]:
     """
-    Simple semantic-ish chunker that splits by paragraphs.
-    Ensures chunks do not exceed the specified size.
+    Packs whole paragraphs ("\\n\\n"-separated) into chunks of at most chunk_size characters.
+    A paragraph longer than chunk_size is split at the last space before the limit.
+    No overlap: chunk_overlap must be 0 (validated by ChunkingConfig).
     """
-    with logfire.span("✂️ Text Chunking", text_length=len(text)):
-        if not text.strip():
-            return []
+    if chunk_overlap:
+        raise ValueError("The paragraph strategy doesn't support overlap.")
+    if not text.strip():
+        return []
 
-        paragraphs = text.split("\n\n")
-        chunks = []
-        current_chunk = ""
+    chunks = []
+    current_chunk = ""
+    for paragraph in text.split("\n\n"):
+        for p in _split_oversized_paragraph(paragraph, chunk_size):
+            separator = "\n\n" if current_chunk else ""
+            if len(current_chunk) + len(separator) + len(p) <= chunk_size:
+                current_chunk += separator + p
+            else:
+                if current_chunk.strip():
+                    chunks.append(current_chunk.strip())
+                current_chunk = p
 
-        for paragraph in paragraphs:
-            for p in _split_oversized_paragraph(paragraph, chunk_size):
-                separator = "\n\n" if current_chunk else ""
-                if len(current_chunk) + len(separator) + len(p) <= chunk_size:
-                    current_chunk += separator + p
-                else:
-                    if current_chunk.strip():
-                        chunks.append(current_chunk.strip())
-                    current_chunk = p
-
-        if current_chunk.strip():
-            chunks.append(current_chunk.strip())
-
-        valid_chunks = [c for c in chunks if c.strip()]
-        logfire.info(f"✅ Generated {len(valid_chunks)} chunks")
-        return valid_chunks
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    return [c for c in chunks if c.strip()]

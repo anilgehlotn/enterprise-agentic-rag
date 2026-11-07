@@ -157,11 +157,11 @@ flowchart LR
     L -->|"html / htm"| HTML["BeautifulSoup"]
     L -->|"txt"| TXT["text"]
     L -->|"docx / pptx"| OFF["python-docx / python-pptx"]
-    PDF & HTML & TXT & OFF --> CH["chunk_text()<br/>paragraph-aware, ≤ 1,500 chars"]
+    PDF & HTML & TXT & OFF --> CH["chunk_text()<br/>CHUNKING_STRATEGY (default paragraph, ≤ 1,500 chars)"]
     CH --> JSON[("processed_data/&lt;source_type&gt;/*.json")]
     CH --> DE["Gemini dense vectors<br/>batches of 50, backoff"]
     CH --> SP["fastembed BM25 sparse vectors"]
-    DE & SP --> QD[("Qdrant: one point per chunk<br/>named vectors dense + bm25<br/>payload text, source, source_type")]
+    DE & SP --> QD[("Qdrant: one point per chunk<br/>named vectors dense + bm25<br/>payload text, source, source_type,<br/>chunk_index, chunking_strategy, chunk_size, chunk_overlap")]
 ```
 
 `ensure_collection()` is the only code that creates the collection. A collection with the old single-vector schema is refused (CLI error, HTTP 409 on upload) instead of mixing formats.

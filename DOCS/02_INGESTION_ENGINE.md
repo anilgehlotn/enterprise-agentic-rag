@@ -10,7 +10,7 @@ graph LR
     Parser -->|HTML| BS4[BeautifulSoup]
     Parser -->|TXT| Simple[Text Loader]
     Parser -->|DOCX/PPTX| Office[python-docx / python-pptx]
-    Local --> Chunker[Semantic Chunker]
+    Local --> Chunker["Chunker<br/>CHUNKING_STRATEGY: paragraph | fixed | recursive | semantic"]
     BS4 --> Chunker
     Simple --> Chunker
     Office --> Chunker
@@ -31,10 +31,30 @@ All document parsing runs entirely on-device — no external OCR service or clou
 *   **Office Docs**: Supports `.docx` via `python-docx` and `.pptx` via `python-pptx`.
 *   **Plain Text**: Loaded directly with a simple text reader.
 
-### 2. Semantic Chunking
-*   **Chunk Size**: `1500` characters.
-*   **Overlap**: None. Chunks are split at paragraph breaks (`\n\n`), not at arbitrary character counts.
-*   **Logic**: A paragraph-aware splitter (`app/ingestion/chunking/splitter.py`) packs whole paragraphs into chunks of at most 1,500 characters. A single paragraph longer than that is split at the last space before the limit, so no chunk exceeds the size.
+### 2. Chunking strategies
+Chunking is configurable with three environment variables (validated at API startup and before `processor --wipe` touches Qdrant; an invalid value fails with a message naming the variable):
+
+| Variable | Default | Values |
+|---|---|---|
+| `CHUNKING_STRATEGY` | `paragraph` | `paragraph`, `fixed`, `recursive`, `semantic` |
+| `CHUNK_SIZE` | `1500` | maximum characters per chunk (> 0) |
+| `CHUNK_OVERLAP` | `0` | characters repeated between consecutive chunks; `< CHUNK_SIZE`; `fixed` and `recursive` only |
+
+The defaults reproduce the original chunker. They stay until the chunking experiment (below) picks a winner. Every strategy has the same interface, `chunker(text, chunk_size, chunk_overlap) -> list[str]` (`app/ingestion/chunking/`), and the same guarantees, enforced by `tests/test_chunking.py`: no chunk longer than `CHUNK_SIZE`, no empty chunks, no word lost, a word longer than the limit is hard-split.
+
+| Strategy | Module | How it splits | Overlap |
+|---|---|---|---|
+| `paragraph` | `splitter.py` | Packs whole paragraphs (`\n\n`) up to the size; a longer paragraph is cut at the last space before the limit. | no |
+| `fixed` | `fixed.py` | Character windows of `CHUNK_SIZE`, each ending at the last whitespace before the limit. | yes, word-aligned |
+| `recursive` | `recursive.py` | Splits on `\n\n`, then `\n`, then `. `, then space, then characters, only where a piece is still too long, then merges neighbouring pieces up to the size (the idea of LangChain's `RecursiveCharacterTextSplitter`, implemented in-house: no extra dependency). | yes, a word-aligned tail of the previous chunk |
+| `semantic` | `semantic.py` | Splits into sentences (`. ! ?` and line breaks), embeds each one, and starts a new chunk where the cosine similarity between neighbours falls below the document's 10th percentile (once the chunk holds half of `CHUNK_SIZE`), or where the size would be exceeded. | no |
+
+Notes:
+*   The parsers emit **no blank lines** for DOCX and HTML (one line per paragraph), so `paragraph` sees each such document as one long paragraph and effectively cuts fixed-size windows at spaces.
+*   `semantic` embeds **every sentence** at ingestion with the same embedder as the chunks (Gemini in production, about 10-20x more embedding calls than chunks), so it is the slowest and most expensive strategy to ingest.
+*   Changing the strategy only affects newly ingested documents. Re-ingest with `--wipe` so the collection doesn't mix strategies.
+
+**Chunking experiment.** `python -m evals.chunking_experiment` compares the strategies × sizes {500, 1000, 1500} × overlaps {0, 15%} on the 15 golden questions. Each configuration is indexed into a temporary in-memory Qdrant (never Qdrant Cloud) with the production hybrid + FlashRank pipeline, using a free local embedder by default (`--embedder local`: sentence-transformers `all-MiniLM-L6-v2`; `--embedder gemini` for the production model). Results, findings and the recommended default: [`evals/results/chunking_experiment.md`](../evals/results/chunking_experiment.md). sentence-transformers (PyTorch) is only in `requirements.txt`, not in the production image.
 
 ### 3. Vectorization & Storage (hybrid: dense + BM25)
 Every chunk is stored as **one Qdrant point with two named vectors**, so one collection serves both retrieval modes (`RETRIEVAL_MODE=hybrid` or `dense`):
@@ -47,7 +67,8 @@ Every chunk is stored as **one Qdrant point with two named vectors**, so one col
 *   **Dense vector**: captures meaning ("retry limit" ≈ "backoffLimit"), batched 50 chunks per Gemini call with exponential backoff on rate limits.
 *   **BM25 sparse vector**: captures exact terms (`backoffLimit`, `parallelism`, `--dry-run`, `job-wq-2`). fastembed tokenises, lower-cases, removes stopwords and stems, then stores each term's BM25 term-frequency weight (with document-length normalisation). It runs locally on CPU (ONNX/tokenizers, **no PyTorch**), in batches of 64 chunks.
 *   **IDF is computed by Qdrant**, not stored: `Modifier.IDF` makes Qdrant apply inverse document frequency at query time from the live collection statistics, so IDF stays correct as documents are added or uploaded.
-*   **Payload** (unchanged): `text`, `source`, `source_type` (`true`, `noisy`, `uploaded`, …).
+*   **Payload**: `text`, `source`, `source_type` (`true`, `noisy`, `uploaded`, …), plus how the chunk was made: `chunk_index` (position in its document), `chunking_strategy`, `chunk_size`, `chunk_overlap`.
+*   **`processed_data/<source_type>/<file>.json`**: `filename`, `source_type`, `chunking` (`chunking_strategy`, `chunk_size`, `chunk_overlap`) and `chunks`, a list of strings whose position is the `chunk_index` (kept as plain strings so `list_indexed_documents` and older snapshots keep working).
 *   **Both paths write both vectors**: the CLI ingestion and the `/documents` upload go through the same `process_file()` → `build_points()`.
 
 ### 4. One collection schema, created in one place

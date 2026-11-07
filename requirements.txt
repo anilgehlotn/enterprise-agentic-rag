@@ -64,7 +64,9 @@ deepeval                    # Pytest-compatible test runner wrapping RAGAS & saf
 langfuse                    # Live production monitoring, tracing & user feedback collection
 
 # --- EMBEDDINGS (SENTENCE TRANSFORMERS) ---
-sentence-transformers       # Used by FlashRank reranker internally
+sentence-transformers       # Local dense embeddings: Gemini fallback (app/services/retrieval/embedding.py) and
+                            # evals/chunking_experiment.py --embedder local. Pulls PyTorch, so it is NOT in
+                            # requirements-prod.txt (Docker) or requirements-dev.txt (CI uses fake embedders).
 langchain_google_genai
 
 langchain-google-vertexai
