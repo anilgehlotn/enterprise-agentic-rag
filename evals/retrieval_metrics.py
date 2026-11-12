@@ -188,6 +188,10 @@ def noise_rate(source_types_per_question: Sequence[Sequence[str]], k: int = 5) -
     """
     Pooled share of top-k chunks whose source_type is "noisy". Questions that returned
     fewer than k chunks contribute only what they returned. No chunks at all → 0.0.
+
+    The metric only means something when distractor documents are indexed: with none, it
+    is 0.0 whatever the retrieval quality. The distractor corpus is not distributed with
+    the repository (see DATA/README.md).
     """
     top = [source_type for types in source_types_per_question for source_type in types[:k]]
     if not top:

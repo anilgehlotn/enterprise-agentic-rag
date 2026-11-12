@@ -107,14 +107,28 @@ class Document:
     text: str
 
 
-def load_corpus(folders: Sequence[tuple[Path, str]], parse: Callable[[str, str], str | None] | None = None):
-    """Parses every supported file in each (folder, source_type) with the ingestion loaders."""
+def load_corpus(
+    folders: Sequence[tuple[Path, str]],
+    parse: Callable[[str, str], str | None] | None = None,
+    log: Callable[[str], None] | None = None,
+):
+    """
+    Parses every supported file in each (folder, source_type) with the ingestion loaders.
+
+    A folder that does not exist is skipped with a note instead of raising: the distractor
+    corpus (DATA/noisy_data) is not distributed with the repository (see DATA/README.md).
+    """
     if parse is None:
         from app.ingestion.processor import parse_document as parse
 
     documents = []
     for folder, source_type in folders:
-        for path in sorted(Path(folder).iterdir()):
+        folder = Path(folder)
+        if not folder.is_dir():
+            if log:
+                log(f"Skipping '{source_type}' corpus: {folder} not found (see DATA/README.md).")
+            continue
+        for path in sorted(folder.iterdir()):
             if not path.is_file():
                 continue
             text = parse(str(path), path.name)
@@ -563,7 +577,11 @@ def main(argv=None) -> None:
 
     samples = load_samples(args.dataset)
     _log("Parsing corpus ...")
-    documents = load_corpus(DEFAULT_CORPUS)
+    documents = load_corpus(DEFAULT_CORPUS, log=_log)
+    if not documents:
+        folders = ", ".join(str(folder) for folder, _ in DEFAULT_CORPUS)
+        _log(f"No documents parsed from {folders}. See DATA/README.md for how to supply a corpus.")
+        raise SystemExit(1)
     dense = local_embedder() if args.embedder == "local" else gemini_embedder()
     sparse = CachedSparse()
     configs = build_grid(args.quick)
@@ -573,13 +591,15 @@ def main(argv=None) -> None:
     )
 
     by_type = {t: [d for d in documents if d.source_type == t] for t in ("true", "noisy")}
+    corpus = ", ".join(
+        f"{len(docs)} {t} documents ({sum(len(d.text) for d in docs) / 1e6:.2f}M chars)" for t, docs in by_type.items()
+    )
+    if not by_type["noisy"]:
+        corpus += " — no distractor corpus present, so noise rate is 0 by construction"
     meta = {
         "date": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
         "grid": "quick" if args.quick else "full",
-        "corpus": ", ".join(
-            f"{len(docs)} {t} documents ({sum(len(d.text) for d in docs) / 1e6:.2f}M chars)"
-            for t, docs in by_type.items()
-        ),
+        "corpus": corpus,
         "embedder": dense.name,
         "dim": dense.dim,
         "args": "".join(a for a in (" --quick" if args.quick else "", f" --embedder {args.embedder}")),

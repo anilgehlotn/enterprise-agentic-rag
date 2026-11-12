@@ -109,13 +109,15 @@ Lists ingested files with their source type (`true` = curated, `noisy` = distrac
 
 ```json
 {
-  "total_documents": 11,
+  "total_documents": 6,
   "documents": [
-    { "filename": "cronjobs.docx", "source_type": "true", "chunk_count": 4 },
-    { "filename": "README.txt", "source_type": "noisy", "chunk_count": 1 }
+    { "filename": "cronjobs.docx", "source_type": "true", "chunk_count": 37 },
+    { "filename": "parallel_work_queue.txt", "source_type": "true", "chunk_count": 4 }
   ]
 }
 ```
+
+`noisy` documents appear only if you supplied your own distractor corpus; it is not distributed with the repository (see [DATA/README.md](../DATA/README.md)).
 
 It reads `processed_data/<source_type>/*.json`, the files written during ingestion. The folder is resolved from the project root, not the current directory. Override it with `PROCESSED_DATA_DIR`. It shows what was ingested on this machine; if the Qdrant collection was wiped or filled elsewhere, the two can differ.
 

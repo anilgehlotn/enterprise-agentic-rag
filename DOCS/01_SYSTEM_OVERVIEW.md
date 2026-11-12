@@ -44,7 +44,7 @@ sequenceDiagram
 *   **`app/`**: the API (`main.py`), the shared service layer (`services/rag_service.py`), the agent (`agents/`), retrieval, ingestion, guardrails, gateway and the MCP server.
 *   **`ui/`**: the Streamlit chat and upload interface.
 *   **`evals/`**: the golden dataset, RAGAS pipeline and retrieval benchmark.
-*   **`DATA/`**: the sample corpus (`true_data` answers, `noisy_data` distractors).
+*   **`DATA/`**: the sample corpus (`true_data` answers; the `noisy_data` distractors are not distributed with the repository — see [DATA/README.md](../DATA/README.md)).
 *   **`DOCS/`**: this documentation suite. Commands are in the [README](../README.md).
 
 ---

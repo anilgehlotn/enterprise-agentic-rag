@@ -3,6 +3,12 @@
 - **Date:** 2026-11-07 04:56 UTC
 - **Grid:** full (18 configurations)
 - **Corpus:** 6 true documents (0.10M chars), 57 noisy documents (4.82M chars)
+  > **The distractor corpus used for this run is no longer in the repository.** Those 57 documents were
+  > third-party material that cannot be redistributed, so they were removed (see
+  > [DATA/README.md](../../DATA/README.md)). This run cannot be reproduced from a fresh clone: re-running
+  > the experiment with a different distractor corpus will give different absolute numbers, and with no
+  > distractors at all the noise rate column is 0 by construction. The comparison between chunking
+  > configurations below is unaffected, because every configuration saw the same corpus.
 - **Questions:** 15 golden questions (`evals/golden_dataset.json`); one question = 6.7 points of hit rate
 - **Dense embedder:** `sentence-transformers/all-MiniLM-L6-v2 (local, max 256 tokens)` (384-dim), cached per unique text
 - **Sparse:** fastembed `Qdrant/bm25`, Qdrant IDF modifier

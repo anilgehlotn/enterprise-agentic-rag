@@ -176,6 +176,16 @@ def test_cli_ingestion_stops_on_old_schema_before_processing(tmp_path, monkeypat
     assert processed == []
 
 
+def test_process_directory_skips_a_missing_folder_without_raising(tmp_path, monkeypatch):
+    """The distractor corpus is not distributed with the repository (DATA/README.md)."""
+    processed = []
+    monkeypatch.setattr(processor, "process_file", lambda *args: processed.append(args))
+
+    processor.process_directory(str(tmp_path / "noisy_data"), "noisy")
+
+    assert processed == []
+
+
 def test_wipe_deletes_then_recreates_through_the_single_create_function(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(processor, "delete_collection", lambda: calls.append("delete") or True)
