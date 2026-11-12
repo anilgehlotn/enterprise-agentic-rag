@@ -140,8 +140,16 @@ def process_file(file_path: str, filename: str, source_type: str):
 
 
 def process_directory(dir_path: str, source_type: str):
-    """Process every file in a directory."""
+    """
+    Process every file in a directory.
+
+    A directory that does not exist is skipped with a warning: the distractor corpus
+    (DATA/noisy_data) is not distributed with the repository (see DATA/README.md).
+    """
     with logfire.span("Scanning Directory", path=dir_path, source=source_type):
+        if not os.path.isdir(dir_path):
+            logfire.warning(f"Skipping '{source_type}': directory '{dir_path}' not found (see DATA/README.md).")
+            return
         files = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
         logfire.info(f"Found {len(files)} files in {dir_path}.")
         for filename in files:

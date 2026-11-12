@@ -121,6 +121,8 @@ python -m app.ingestion.processor DATA --wipe
 
 Sub-folders become source types (`DATA/true_data` → `true`, `DATA/noisy_data` → `noisy`). `--wipe` drops and recreates the collection named by `QDRANT_COLLECTION`. It is required once for a collection created before hybrid search.
 
+`DATA/noisy_data` (the distractor corpus) is **not** distributed with this repository, because those documents are third-party material. A missing folder is skipped with a message, so this command works with `true_data` alone. [DATA/README.md](DATA/README.md) explains what the corpus is, how to supply your own distractors, and what their absence does to the noise-rate metric.
+
 **4. Run the API and the UI**
 
 ```bash
@@ -271,18 +273,16 @@ ui/pages/analytics.py     Streamlit analytics page (GET /analytics)
 evals/                    Golden dataset, RAGAS pipeline + dashboard, retrieval benchmark, chunking experiment
 tests/                    Unit and API tests (no keys, no network)
 notebooks/                Guardrails, gateway and evals experiments
-DATA/                     Sample corpus: true_data (answers) and noisy_data (distractors)
+DATA/                     Sample corpus: true_data (answers); noisy_data (distractors) not distributed
 processed_data/           Parsed chunks written by ingestion (read by list_indexed_documents)
 DOCS/                     Guides, listed below
 Dockerfile                Multi-stage production image for Cloud Run
 .github/workflows/        ci.yml (lint, test, docker) and deploy-cloud-run.yml (manual)
 ```
 
-## Origin
+## What I built
 
-This project began as an import of the open-source [8hr-MARATHON](https://github.com/d-hackmt/8hr-MARATHON) Enterprise Agentic RAG project, which provided the base pipeline: document ingestion, a planner → retriever → responder LangGraph agent, Qdrant search with FlashRank reranking, NeMo Guardrails, the Portkey gateway, the Streamlit UI, the RAGAS evaluation suite and the notebooks. The first commits of this repository (22 July 2026) import and reorganise that code.
-
-Added in this repository since the import:
+Work added in this repository:
 
 - **Bug fixes**: production image dependencies (Gemini embeddings; DOCX/PPTX parsing without `unstructured`; pdfplumber), the first upload into an empty Qdrant collection, citation scores in the API response, eval pipeline crashes, and planner output parsing.
 - **Document upload**: `POST /documents` with type and size validation, and the Streamlit upload dialog.
@@ -291,7 +291,9 @@ Added in this repository since the import:
 - **MCP server** with three tools for MCP clients.
 - **SSE streaming** (`/query/stream`), **persistent memory** (SQLite / Postgres checkpointer with thread reset) and **per-IP rate limiting**.
 - **CI/CD**: ruff, pytest with a coverage gate, and a Docker build + `/health` smoke test on every push; a rebuilt production image (multi-stage, non-root, installed with uv because pip could not resolve the pinned requirements); and a manual Cloud Run deploy workflow using Workload Identity Federation and Secret Manager.
-- **Test suite**: from 2 test files at import to 22 files (363 tests) that run without API keys or network.
+- **Chunking strategies and the chunking experiment**: `fixed`, `recursive` and `semantic` chunkers next to the default `paragraph` chunker, configured with `CHUNKING_STRATEGY` / `CHUNK_SIZE` / `CHUNK_OVERLAP`, and an experiment that compares 18 configurations on the golden questions.
+- **Feedback and SQL analytics**: 👍/👎 feedback (`POST /feedback`), a query log, and `GET /analytics` backed by hand-written SQL with plain SQL migrations, plus a Streamlit analytics page.
+- **Test suite**: from 2 test files at the start to 24 files (510 tests) that run without API keys or network.
 
 ## Documentation
 
@@ -313,4 +315,20 @@ Added in this repository since the import:
 | [13 MCP server](DOCS/13_MCP_SERVER.md) | MCP tools and client setup |
 | [14 Analytics](DOCS/14_ANALYTICS.md) | Query log and feedback schema, every analytics SQL query, privacy, sqlite3 CLI |
 | [Project guide](DOCS/PROJECT_GUIDE.md) | Beginner-friendly walkthrough and interview prep |
-| [CLAUDE.md](CLAUDE.md) | Conventions for AI-assisted development |
+| [Roadmap](DOCS/ROADMAP.md) | Planned work: phases, dependencies and a section per open issue |
+| [Sample corpus](DATA/README.md) | What is in `DATA/`, where it came from, and how to supply your own distractors |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, checks, conventions and architecture rules |
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the checks to run and the architecture rules. Security problems should be reported privately, as described in [SECURITY.md](SECURITY.md); contributors are expected to follow the [code of conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+**No open-source licence has been applied yet.** Part of the code in this repository is adapted from a project that carries no licence of its own, so a licence cannot be granted for it. My own additions will be released under the MIT licence once that is resolved. Until then, no permissions beyond those granted by copyright law are given.
+
+The documents under [DATA/](DATA/README.md) and the reference material in `DOCS/` are not mine either: each belongs to its own author or publisher and is kept for development and evaluation only.
+
+## Acknowledgements
+
+The initial pipeline (ingestion, a basic planner → retriever → responder agent, Qdrant search, guardrails, gateway, UI and evaluation notebooks) was adapted from this [8-hour Enterprise Agentic RAG tutorial](https://www.youtube.com/watch?v=bjkjaqUZl4E) and its [source repository](https://github.com/d-hackmt/8hr-MARATHON).

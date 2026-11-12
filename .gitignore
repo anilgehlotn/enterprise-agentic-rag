@@ -32,7 +32,14 @@ index.faiss
 metadata.pkl
 
 # Data
+# The distractor corpus is not distributed with this repository: the documents are
+# third-party material with no licence to redistribute (see DATA/README.md). Supply
+# your own distractor documents here; they stay local.
+DATA/noisy_data/
+processed_data/noisy/
 
+# Reference PDFs that are not ours to redistribute.
+DOCS/GATEWAY GUARDRAIL EVAL/
 
 # IDEs
 .vscode/
@@ -50,7 +57,7 @@ commands.md
 
 tenvv
 
-# Claude Code memory & session data
+# Local assistant data
 .claude/
 
 # Logs

@@ -56,28 +56,38 @@ def load_all_chunks() -> list[dict]:
     """
     Returns all chunks tagged with source filename and whether they are noise.
     Used by the eval pipeline to understand what context the RAG system draws from.
+
+    A corpus folder that does not exist is skipped with a message on stderr instead of
+    raising: the distractor corpus (DATA/noisy_data) is not distributed with the
+    repository (see DATA/README.md).
     """
     results = []
 
-    for fname in sorted(os.listdir(TRUE_DATA_DIR)):
-        fpath = os.path.join(TRUE_DATA_DIR, fname)
-        if not os.path.isfile(fpath):
-            continue
-        text = parse_file(fpath)
-        if text:
-            for chunk in chunk_text(text):
-                results.append({"text": chunk, "source": fname, "is_noise": False})
+    if os.path.isdir(TRUE_DATA_DIR):
+        for fname in sorted(os.listdir(TRUE_DATA_DIR)):
+            fpath = os.path.join(TRUE_DATA_DIR, fname)
+            if not os.path.isfile(fpath):
+                continue
+            text = parse_file(fpath)
+            if text:
+                for chunk in chunk_text(text):
+                    results.append({"text": chunk, "source": fname, "is_noise": False})
+    else:
+        print(f"Skipping curated corpus: {TRUE_DATA_DIR} not found (see DATA/README.md).", file=sys.stderr)
 
-    for fname in sorted(os.listdir(NOISY_DATA_DIR)):
-        ext = os.path.splitext(fname)[1].lower()
-        if ext not in NOISY_ALLOWED_EXTS:
-            continue
-        fpath = os.path.join(NOISY_DATA_DIR, fname)
-        if not os.path.isfile(fpath):
-            continue
-        text = parse_file(fpath)
-        if text:
-            for chunk in chunk_text(text):
-                results.append({"text": chunk, "source": fname, "is_noise": True})
+    if os.path.isdir(NOISY_DATA_DIR):
+        for fname in sorted(os.listdir(NOISY_DATA_DIR)):
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in NOISY_ALLOWED_EXTS:
+                continue
+            fpath = os.path.join(NOISY_DATA_DIR, fname)
+            if not os.path.isfile(fpath):
+                continue
+            text = parse_file(fpath)
+            if text:
+                for chunk in chunk_text(text):
+                    results.append({"text": chunk, "source": fname, "is_noise": True})
+    else:
+        print(f"Skipping distractor corpus: {NOISY_DATA_DIR} not found (see DATA/README.md).", file=sys.stderr)
 
     return results

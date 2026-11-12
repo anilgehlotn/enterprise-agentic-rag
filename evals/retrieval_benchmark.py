@@ -216,8 +216,10 @@ def render_report(results, per_question, meta: dict, k: int, candidates: int, n_
 {comparison_table(results, k)}
 
 Hit rate and MRR: higher is better. Noise rate = share of top-{k} chunks from the distractor
-(`noisy`) corpus: lower is better. Latency includes query embedding and, for FlashRank rows,
-the rerank. Match rule: `evals/retrieval_metrics.py`.
+(`noisy`) corpus: lower is better; it is 0 by construction when the indexed collection holds
+no distractor documents (the distractor corpus is not distributed with the repository, see
+`DATA/README.md`). Latency includes query embedding and, for FlashRank rows, the rerank.
+Match rule: `evals/retrieval_metrics.py`.
 
 ## Rank of the first relevant chunk per question
 

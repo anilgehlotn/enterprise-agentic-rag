@@ -138,6 +138,29 @@ def test_load_corpus_parses_supported_files_with_their_source_type(corpus_dirs):
     assert documents[0].text == TRUE_DOC
 
 
+def test_load_corpus_skips_a_missing_folder_instead_of_raising(corpus_dirs, tmp_path):
+    """The distractor corpus is not distributed with the repository (DATA/README.md)."""
+    (true_dir, _), _ = corpus_dirs
+    notes = []
+
+    documents = ce.load_corpus(((true_dir, "true"), (tmp_path / "absent", "noisy")), log=notes.append)
+
+    assert [(d.filename, d.source_type) for d in documents] == [("jobs.txt", "true")]
+    assert len(notes) == 1
+    assert "noisy" in notes[0] and "DATA/README.md" in notes[0]
+
+
+def test_main_exits_with_a_message_when_no_corpus_is_present(tmp_path, monkeypatch, no_real_qdrant, capsys):
+    monkeypatch.setattr(ce, "DEFAULT_CORPUS", ((tmp_path / "true_data", "true"), (tmp_path / "noisy_data", "noisy")))
+
+    with pytest.raises(SystemExit) as exc:
+        ce.main(["--quick", "--output", str(tmp_path / "report.md")])
+
+    assert exc.value.code == 1
+    assert "DATA/README.md" in capsys.readouterr().err
+    assert not (tmp_path / "report.md").exists()
+
+
 def test_cached_embedder_embeds_each_unique_text_once():
     calls = []
 

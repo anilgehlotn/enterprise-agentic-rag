@@ -34,7 +34,7 @@ commands.md
 # Observability local state
 .logfire/
 
-# Claude Code memory
+# Local assistant data
 .claude/
 
 # Data — lives in GCS, not in the container
